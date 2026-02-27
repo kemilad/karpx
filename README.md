@@ -14,8 +14,6 @@
 A single-binary TUI to install, upgrade, and configure [Karpenter](https://karpenter.sh)
 across all your EKS clusters — no YAML, no context-switching, just your terminal.
 
----
-
 ## Install
 
 ### Homebrew (macOS / Linux) — recommended
@@ -100,15 +98,11 @@ karpx np -c my-cluster          # short alias
 karpx version
 ```
 
----
-
 ## Requirements
 
 - `kubectl` configured (`~/.kube/config`) with your EKS cluster contexts
 - AWS credentials (environment variables, `~/.aws/credentials`, or IAM instance role)
 - Helm is **not** required separately — karpx uses the Helm Go library internally
-
----
 
 ## How it works
 
@@ -122,14 +116,10 @@ karpx is a single static binary with zero runtime dependencies. Internally it us
 
 Memory footprint is kept under 128 MiB at all times via `GOMEMLIMIT` and a bounded worker pool.
 
----
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The goal is to contribute this to the Karpenter
 community tools list and eventually propose it to the AWS containers roadmap.
-
----
 
 ## License
 
