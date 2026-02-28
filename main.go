@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/kemilad/karpx/internal/compat"
 	"github.com/kemilad/karpx/internal/helm"
 	"github.com/kemilad/karpx/internal/kube"
+	"github.com/kemilad/karpx/internal/nodes"
 	"github.com/kemilad/karpx/internal/tui"
 )
 
@@ -73,7 +75,7 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVarP(&region,  "region",  "r", "", "AWS region (default: from AWS config)")
 	root.SilenceUsage = true
 
-	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), nodePoolsCmd(), versionCmd())
+	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), nodePoolsCmd(), nodesCmd(), versionCmd())
 	return root
 }
 
@@ -371,6 +373,10 @@ func runInstallAWS(kubeCtx, clusterName, region, roleARN, karpVer, intQueue stri
 		}
 	}
 
+	// ── Step 6: Workload analysis + node type recommendation ──────────────
+	fmt.Println()
+	rec := runNodeRecommendation(kubeCtx, kube.ProviderAWS)
+
 	// ── Summary + confirm ─────────────────────────────────────────────────
 	fmt.Println()
 	printSection("Summary")
@@ -383,11 +389,23 @@ func runInstallAWS(kubeCtx, clusterName, region, roleARN, karpVer, intQueue stri
 		fmt.Printf("  Interruption Q  : %s\n", intQueue)
 	}
 	fmt.Printf("  Karpenter       : %s\n", karpVer)
+	if rec != nil {
+		fmt.Printf("  Node families   : %s\n", strings.Join(rec.InstanceFamilies, ", "))
+		fmt.Printf("  Capacity types  : %s\n", strings.Join(rec.CapacityTypes, ", "))
+		fmt.Printf("  Architectures   : %s\n", strings.Join(rec.Architectures, ", "))
+	}
 	fmt.Println()
 
 	if !confirmPrompt("  Proceed with installation? [y/N] ") {
 		fmt.Printf("  Cancelled.\n\n")
 		return nil
+	}
+
+	// ── Apply NodePool manifest ────────────────────────────────────────────
+	if rec != nil {
+		manifest := nodes.GenerateManifest(*rec, clusterName, roleARN)
+		fmt.Println()
+		applyOrSaveManifest(manifest, kubeCtx)
 	}
 
 	fmt.Printf("\n  Installing Karpenter %s on AWS EKS…\n", karpVer)
@@ -561,6 +579,267 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 	fmt.Printf("\n  Upgrading Karpenter to %s…\n", targetVer)
 	fmt.Printf("  (helm upgrade wiring coming in next release)\n\n")
 	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// nodes command — analyse workloads and generate/apply a NodePool config
+// ─────────────────────────────────────────────────────────────────────────────
+
+func nodesCmd() *cobra.Command {
+	var kubeCtx, providerFlag, modeFlag string
+	cmd := &cobra.Command{
+		Use:   "nodes",
+		Short: "Analyse workloads and generate an optimised Karpenter NodePool",
+		Long: `Analyse all running workloads in the cluster, ask how you want to
+optimise node provisioning, then generate (and optionally apply) the ideal
+Karpenter NodePool + NodeClass configuration.
+
+Optimisation modes:
+  cost        — Spot instances, Graviton (arm64) where available, lowest $/hour
+  balanced    — Mixed Spot + On-Demand, multiple families
+  performance — On-Demand only, latest-gen instances, maximum throughput
+`,
+		Example: `  karpx nodes -c my-cluster
+  karpx nodes -c my-cluster --mode cost
+  karpx nodes -c my-cluster --provider aws --mode performance`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runNodes(kubeCtx, providerFlag, modeFlag)
+		},
+	}
+	cmd.Flags().StringVarP(&kubeCtx,     "context",  "c", "", "kubeconfig context")
+	cmd.Flags().StringVar(&providerFlag, "provider",     "", "cloud provider: aws | azure | gcp (default: auto-detect)")
+	cmd.Flags().StringVar(&modeFlag,     "mode",         "", "optimisation mode: cost | balanced | performance (default: ask)")
+	return cmd
+}
+
+func runNodes(kubeCtx, providerFlag, modeFlag string) error {
+	fmt.Printf("\n  ⚡ karpx nodes  context:%s\n", contextOrCurrent(kubeCtx))
+
+	// Resolve provider.
+	var provider kube.Provider
+	if providerFlag != "" {
+		provider = kube.ParseProvider(providerFlag)
+	} else {
+		provider = kube.DetectProvider(kubeCtx)
+		if provider == kube.ProviderUnknown {
+			provider = askProviderMenu()
+		}
+	}
+	if !provider.Supported() {
+		printUnsupportedProvider()
+		return nil
+	}
+	fmt.Printf("  Provider : %s\n\n", provider.Meta().Label)
+
+	// Resolve mode (skip asking if passed via flag).
+	var mode nodes.OptimizationMode
+	if modeFlag != "" {
+		switch strings.ToLower(modeFlag) {
+		case "cost":
+			mode = nodes.ModeCostOptimized
+		case "performance", "perf":
+			mode = nodes.ModeHighPerformance
+		default:
+			mode = nodes.ModeBalanced
+		}
+	}
+
+	rec := runNodeRecommendationWithMode(kubeCtx, provider, mode)
+	if rec == nil {
+		return nil
+	}
+
+	// Print the manifest.
+	manifest := nodes.GenerateManifest(*rec, "", "")
+	fmt.Println()
+	printSection("Generated NodePool manifest")
+	fmt.Println()
+	fmt.Println(manifest)
+
+	applyOrSaveManifest(manifest, kubeCtx)
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared node recommendation logic (used by both install and nodes command)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// runNodeRecommendation runs workload analysis + asks optimisation preference.
+// Returns nil if the user declines or no useful recommendation can be made.
+func runNodeRecommendation(kubeCtx string, provider kube.Provider) *nodes.Recommendation {
+	return runNodeRecommendationWithMode(kubeCtx, provider, "")
+}
+
+func runNodeRecommendationWithMode(kubeCtx string, provider kube.Provider, mode nodes.OptimizationMode) *nodes.Recommendation {
+	printSection("Step 6: Node type optimisation")
+	fmt.Println()
+
+	// ── Analyse workloads ──────────────────────────────────────────────────
+	fmt.Printf("  Analysing running workloads in the cluster…\n")
+	profile, err := kube.AnalyzeWorkloads(kubeCtx)
+	if err != nil {
+		fmt.Printf("  ⚠  Could not read workloads (%v)\n", err)
+		fmt.Printf("     Continuing with defaults — you can re-run `karpx nodes` later.\n\n")
+		profile = &kube.WorkloadProfile{NoRequests: true}
+	}
+
+	wtype := kube.ClassifyWorkload(profile)
+
+	// ── Print analysis summary ─────────────────────────────────────────────
+	if profile.TotalPods > 0 {
+		fmt.Printf("  Discovered workloads:\n")
+		fmt.Printf("    Pods           : %d  (across %d namespace(s))\n", profile.TotalPods, profile.Namespaces)
+		fmt.Printf("    CPU requested  : %.1f cores total   (largest pod: %.1f cores)\n",
+			float64(profile.TotalCPUm)/1000.0, float64(profile.MaxPodCPUm)/1000.0)
+		fmt.Printf("    Memory         : %.1f GiB total     (largest pod: %.0f MiB)\n",
+			float64(profile.TotalMemMiB)/1024.0, float64(profile.MaxPodMemMiB))
+		if profile.HasGPU {
+			fmt.Printf("    GPU workloads  : detected\n")
+		}
+		if profile.HasBatchJobs {
+			fmt.Printf("    Batch jobs     : detected\n")
+		}
+		fmt.Printf("    Workload type  : %s", string(wtype))
+		switch wtype {
+		case kube.WorkloadMemory:
+			fmt.Printf("  (%.1f GiB/core — memory-heavy)\n", profile.MemPerCPUGiB)
+		case kube.WorkloadCPU:
+			fmt.Printf("  (%.1f GiB/core — compute-heavy)\n", profile.MemPerCPUGiB)
+		case kube.WorkloadGPU:
+			fmt.Printf("  (GPU resources requested)\n")
+		default:
+			if profile.MemPerCPUGiB > 0 {
+				fmt.Printf("  (%.1f GiB/core)\n", profile.MemPerCPUGiB)
+			} else {
+				fmt.Printf("  (no resource requests set)\n")
+			}
+		}
+	} else {
+		fmt.Printf("  No running pods found — using defaults.\n")
+	}
+
+	// ── Ask optimisation preference if not already known ───────────────────
+	if mode == "" {
+		fmt.Println()
+		mode = askOptimizationMode()
+		if mode == "" {
+			return nil
+		}
+	}
+
+	// ── Build recommendation ───────────────────────────────────────────────
+	rec := nodes.Build(profile, mode, provider)
+
+	// ── Print recommendation ───────────────────────────────────────────────
+	fmt.Println()
+	printSection("Recommended node configuration")
+	fmt.Println()
+	fmt.Printf("  Mode              : %s\n", modeLabelShort(mode))
+	fmt.Printf("  Instance families : %s\n", strings.Join(rec.InstanceFamilies, ", "))
+	fmt.Printf("  Capacity types    : %s\n", strings.Join(rec.CapacityTypes, ", "))
+	fmt.Printf("  Architectures     : %s\n", strings.Join(rec.Architectures, ", "))
+	fmt.Printf("  CPU sizes (vCPU)  : %s\n", strings.Join(rec.CPUSizes, ", "))
+	fmt.Printf("  Min node memory   : %d MiB\n", rec.MinNodeMiB)
+	fmt.Println()
+	fmt.Printf("  Why:\n")
+	for _, r := range rec.Reasoning {
+		fmt.Printf("    • %s\n", r)
+	}
+
+	return &rec
+}
+
+// askOptimizationMode shows the cost vs performance question.
+func askOptimizationMode() nodes.OptimizationMode {
+	fmt.Printf(`  What is your node provisioning priority?
+
+    [1]  Cost-Optimized   — Spot instances + Graviton (arm64) where available
+                            Saves 60-80%% vs on-demand; ideal for fault-tolerant workloads
+
+    [2]  Balanced         — Mixed Spot + On-Demand, multiple instance families
+                            Good price/performance for most production workloads
+
+    [3]  High-Performance — On-Demand only, latest-gen instances, no Spot interruptions
+                            Best for latency-sensitive or stateful services
+
+`)
+	fmt.Print("  Choice [1-3]: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		switch strings.TrimSpace(scanner.Text()) {
+		case "1":
+			return nodes.ModeCostOptimized
+		case "2":
+			return nodes.ModeBalanced
+		case "3":
+			return nodes.ModeHighPerformance
+		}
+	}
+	fmt.Printf("  Invalid choice — skipping node optimisation.\n\n")
+	return ""
+}
+
+// applyOrSaveManifest asks whether to kubectl-apply or save to a file.
+func applyOrSaveManifest(manifest, kubeCtx string) {
+	fmt.Println()
+	fmt.Printf("  What would you like to do with this NodePool manifest?\n\n")
+	fmt.Printf("    [1]  Apply now    — kubectl apply -f - (applies to current cluster)\n")
+	fmt.Printf("    [2]  Save to file — write karpx-nodepool.yaml in the current directory\n")
+	fmt.Printf("    [3]  Skip         — I'll handle it manually\n\n")
+	fmt.Print("  Choice [1-3]: ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return
+	}
+	switch strings.TrimSpace(scanner.Text()) {
+	case "1":
+		applyManifest(manifest, kubeCtx)
+	case "2":
+		saveManifest(manifest)
+	default:
+		fmt.Printf("\n  Skipped — copy the YAML above and run:\n")
+		fmt.Printf("    kubectl apply -f karpx-nodepool.yaml\n\n")
+	}
+}
+
+func applyManifest(manifest, kubeCtx string) {
+	args := []string{"apply", "-f", "-"}
+	if kubeCtx != "" {
+		args = append(args, "--context", kubeCtx)
+	}
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdin  = strings.NewReader(manifest)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	fmt.Printf("\n  Applying NodePool manifest…\n\n")
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("\n  ✗ kubectl apply failed: %v\n\n", err)
+	} else {
+		fmt.Printf("\n  ✓  NodePool applied successfully.\n\n")
+	}
+}
+
+func saveManifest(manifest string) {
+	const filename = "karpx-nodepool.yaml"
+	if err := os.WriteFile(filename, []byte(manifest), 0644); err != nil {
+		fmt.Printf("\n  ✗ Could not write file: %v\n\n", err)
+		return
+	}
+	fmt.Printf("\n  ✓  Saved to %s\n", filename)
+	fmt.Printf("     Review and apply with:\n")
+	fmt.Printf("     kubectl apply -f %s\n\n", filename)
+}
+
+func modeLabelShort(m nodes.OptimizationMode) string {
+	switch m {
+	case nodes.ModeCostOptimized:
+		return "Cost-Optimized (Spot + Graviton)"
+	case nodes.ModeHighPerformance:
+		return "High-Performance (On-Demand, latest-gen)"
+	default:
+		return "Balanced (Spot + On-Demand, mixed families)"
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
