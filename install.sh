@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 #  karpx installer
-#  Usage: curl -fsSL https://raw.githubusercontent.com/your-org/karpx/main/scripts/install.sh | bash
+#  Usage: curl -fsSL https://raw.githubusercontent.com/kemilad/karpx/main/install.sh | bash
 # ============================================================
 set -euo pipefail
 
-REPO="your-org/karpx"
+REPO="kemilad/karpx"
 BINARY="karpx"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 

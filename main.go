@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/your-org/karpx/internal/tui"
+	"github.com/kemilad/karpx/internal/tui"
 )
 
 var version = "dev"
