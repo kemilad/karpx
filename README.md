@@ -74,6 +74,18 @@ karpx -c my-eks-prod             # target a specific cluster
 karpx -c my-eks-prod -r ap-southeast-1
 ```
 
+### Web dashboard
+
+```bash
+karpx ui                         # opens http://localhost:7654 in your browser
+karpx ui -c my-eks-prod          # single-cluster view
+karpx ui --port 9000             # custom port
+```
+
+The dashboard shows all kubeconfig contexts with their cloud provider, Kubernetes
+version, Karpenter status, and compatibility badges. It auto-refreshes every 30 s.
+Stop it with `Ctrl+C`.
+
 ### TUI keyboard shortcuts
 
 | Key | Action |
