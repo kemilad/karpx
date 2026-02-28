@@ -19,14 +19,14 @@ across all your EKS clusters — no YAML, no context-switching, just your termin
 ### Homebrew (macOS / Linux) — recommended
 
 ```bash
-brew tap your-org/tap
+brew tap kemilad/tap
 brew install karpx
 ```
 
 ### curl installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-org/karpx/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kemilad/karpx/main/install.sh | bash
 ```
 
 Override version or install directory:
@@ -39,12 +39,12 @@ VERSION=v0.2.0 INSTALL_DIR=~/.local/bin \
 ### go install
 
 ```bash
-go install github.com/your-org/karpx@latest
+go install github.com/kemilad/karpx@latest
 ```
 
 ### Manual
 
-Download the binary for your platform from [Releases](https://github.com/your-org/karpx/releases),
+Download the binary for your platform from [Releases](https://github.com/kemilad/karpx/releases),
 extract it, and place it on your `$PATH`.
 
 ---
