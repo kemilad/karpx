@@ -1,4 +1,4 @@
-package views
+package tui
 
 import "github.com/charmbracelet/lipgloss"
 
@@ -17,9 +17,9 @@ var (
 	colSubtle    = lipgloss.Color("#1E1B4B") // indigo-dark (selected row bg)
 )
 
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Typography
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
 var (
 	StyleTitle = lipgloss.NewStyle().
@@ -46,9 +46,9 @@ var (
 	StyleNormal  = lipgloss.NewStyle().Foreground(colHighlight)
 )
 
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Layout
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
 var (
 	StylePanel = lipgloss.NewStyle().
@@ -66,7 +66,6 @@ var (
 			Foreground(colHighlight).
 			Padding(0, 1)
 
-	// Full-width header bar.
 	StyleHeader = lipgloss.NewStyle().
 			Background(colSubtle).
 			Foreground(colHighlight).
@@ -74,9 +73,9 @@ var (
 			Padding(0, 2)
 )
 
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Table
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
 var (
 	StyleTableHeader = lipgloss.NewStyle().
@@ -93,9 +92,9 @@ var (
 			Foreground(colHighlight)
 )
 
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Status badges
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
 func BadgeInstalled() string {
 	return lipgloss.NewStyle().
@@ -106,10 +105,22 @@ func BadgeInstalled() string {
 func BadgeUpgradeAvailable(toVer string) string {
 	label := "▲ UPGRADE"
 	if toVer != "" {
-		label += " → " + toVer
+		label += " → v" + toVer
 	}
 	return lipgloss.NewStyle().
 		Background(colWarning).Foreground(colBg).Bold(true).Padding(0, 1).
+		Render(label)
+}
+
+// BadgeIncompatible is shown when the installed Karpenter version is not
+// compatible with the cluster's Kubernetes version.
+func BadgeIncompatible(toVer string) string {
+	label := "✗ INCOMPATIBLE"
+	if toVer != "" {
+		label += " → v" + toVer
+	}
+	return lipgloss.NewStyle().
+		Background(colDanger).Foreground(colHighlight).Bold(true).Padding(0, 1).
 		Render(label)
 }
 
@@ -131,11 +142,10 @@ func BadgeError() string {
 		Render("! ERROR")
 }
 
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Keyboard hint renderer
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Key renders a keyboard shortcut like  [i] Install
 func Key(key, label string) string {
 	k := lipgloss.NewStyle().
 		Background(colBorder).Foreground(colPrimaryLt).Bold(true).Padding(0, 1).
@@ -144,7 +154,6 @@ func Key(key, label string) string {
 	return k + l
 }
 
-// KeyActive renders a highlighted shortcut (for the primary action).
 func KeyActive(key, label string) string {
 	k := lipgloss.NewStyle().
 		Background(colPrimary).Foreground(colHighlight).Bold(true).Padding(0, 1).
@@ -153,11 +162,10 @@ func KeyActive(key, label string) string {
 	return k + l
 }
 
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Section header helper
-// -----------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
-// SectionTitle renders a labelled divider line:  ─── Install ───────────
 func SectionTitle(label string) string {
 	left  := StyleMuted.Render("  ── ")
 	title := lipgloss.NewStyle().Foreground(colPrimaryLt).Bold(true).Render(label)
