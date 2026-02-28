@@ -86,6 +86,26 @@ karpx -c my-eks-prod -r ap-southeast-1
 | `Esc` | Go back |
 | `q` | Quit |
 
+### Node type optimisation
+
+`karpx nodes` analyses your running workloads and asks one question:
+
+```
+  What is your node provisioning priority?
+
+    [1]  Cost-Optimized   — Spot + Graviton (arm64), saves 60-80% vs on-demand
+    [2]  Balanced         — Mixed Spot + On-Demand, multiple instance families
+    [3]  High-Performance — On-Demand only, latest-gen, no interruptions
+```
+
+It then generates and optionally applies a Karpenter **NodePool + NodeClass** manifest
+tuned to your actual workload profile (CPU/memory ratio, GPU usage, batch jobs).
+
+```bash
+karpx nodes -c my-cluster              # interactive: analyse + ask + apply/save
+karpx nodes -c my-cluster --mode cost  # skip the question, use cost-optimised
+```
+
 ### Non-interactive (CI / scripting)
 
 ```bash
@@ -113,6 +133,11 @@ karpx upgrade -c my-cluster
 
 # Upgrade to a specific version.
 karpx upgrade -c my-cluster --version v1.3.0
+
+# Analyse workloads and generate an optimised NodePool manifest.
+karpx nodes -c my-cluster
+karpx nodes -c my-cluster --mode cost        # cost-optimised (Spot + Graviton)
+karpx nodes -c my-cluster --mode performance # high-performance (on-demand)
 
 # List NodePools.
 karpx nodepools -c my-cluster
