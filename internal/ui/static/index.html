@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>karpx dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0F0F1A;
+      --surface:   #1A1A2E;
+      --border:    #2A2A42;
+      --violet:    #7C3AED;
+      --violet-lt: #A78BFA;
+      --cyan:      #06B6D4;
+      --cyan-lt:   #67E8F9;
+      --green:     #10B981;
+      --amber:     #F59E0B;
+      --red:       #EF4444;
+      --muted:     #6B7280;
+      --text:      #E2E8F0;
+      --text-dim:  #94A3B8;
+      --mono:      "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--violet-lt);
+      letter-spacing: 0.04em;
+    }
+
+    .logo-bolt { color: var(--cyan); font-size: 1.4rem; }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .refresh-info {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    button {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--violet);
+      color: #fff;
+      border-color: var(--violet);
+    }
+    .btn-primary:hover { background: #6D28D9; }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-dim);
+    }
+    .btn-ghost:hover { border-color: var(--violet-lt); color: var(--violet-lt); }
+
+    /* ── Layout ── */
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.2rem;
+    }
+
+    .stat-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.4rem;
+    }
+
+    .stat-value {
+      font-family: var(--mono);
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--cyan-lt);
+    }
+
+    /* ── Section header ── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+
+    .section-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+    }
+
+    /* ── Cluster table ── */
+    .cluster-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    .cluster-table th {
+      text-align: left;
+      padding: 0.5rem 0.8rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cluster-table td {
+      padding: 0.75rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+
+    .cluster-table tr:last-child td { border-bottom: none; }
+
+    .cluster-table tbody tr {
+      transition: background 0.1s;
+    }
+    .cluster-table tbody tr:hover { background: rgba(124,58,237,0.05); }
+
+    .cluster-name {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--violet-lt);
+      font-weight: 600;
+    }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.2rem 0.55rem;
+      border-radius: 99px;
+      white-space: nowrap;
+    }
+
+    .badge-aws     { background: rgba(251,146,60,0.15); color: #FB923C; }
+    .badge-azure   { background: rgba(96,165,250,0.15);  color: #60A5FA; }
+    .badge-gcp     { background: rgba(52,211,153,0.15);  color: #34D399; }
+    .badge-unknown { background: rgba(107,114,128,0.15); color: #9CA3AF; }
+
+    .badge-ok      { background: rgba(16,185,129,0.15);  color: var(--green); }
+    .badge-warn    { background: rgba(245,158,11,0.15);  color: var(--amber); }
+    .badge-err     { background: rgba(239,68,68,0.15);   color: var(--red);   }
+    .badge-none    { background: rgba(107,114,128,0.12); color: var(--muted); }
+
+    /* ── Version chip ── */
+    .version-chip {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--text-dim);
+    }
+
+    .upgrade-hint {
+      font-size: 0.72rem;
+      color: var(--amber);
+      margin-left: 0.4rem;
+    }
+
+    /* ── Loading / error states ── */
+    .loading-row td {
+      text-align: center;
+      padding: 3rem;
+      color: var(--muted);
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--violet);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-banner {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: var(--red);
+      border-radius: 8px;
+      padding: 0.9rem 1.2rem;
+      margin-bottom: 1.2rem;
+      font-size: 0.875rem;
+    }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      padding: 1.5rem;
+      color: var(--muted);
+      font-size: 0.75rem;
+      border-top: 1px solid var(--border);
+      margin-top: 2rem;
+    }
+
+    footer a { color: var(--violet-lt); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Table wrapper ── */
+    .table-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 640px) {
+      .hide-sm { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <span class="logo-bolt">⚡</span>
+    karpx
+  </div>
+  <div class="header-right">
+    <span class="refresh-info" id="last-updated">—</span>
+    <button class="btn-ghost" onclick="refresh()">↺ Refresh</button>
+  </div>
+</header>
+
+<main>
+  <!-- Summary stats -->
+  <div class="stats-row" id="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">Clusters</div>
+      <div class="stat-value" id="stat-total">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Karpenter installed</div>
+      <div class="stat-value" id="stat-installed">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Upgrades available</div>
+      <div class="stat-value" id="stat-upgrades">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Incompatible</div>
+      <div class="stat-value" id="stat-incompat">—</div>
+    </div>
+  </div>
+
+  <!-- Error banner (hidden by default) -->
+  <div class="error-banner" id="error-banner" style="display:none"></div>
+
+  <!-- Cluster table -->
+  <div class="section-header">
+    <span class="section-title">Clusters</span>
+  </div>
+  <div class="table-wrapper">
+    <table class="cluster-table">
+      <thead>
+        <tr>
+          <th>Context</th>
+          <th>Provider</th>
+          <th class="hide-sm">Kubernetes</th>
+          <th>Karpenter</th>
+          <th class="hide-sm">Compatibility</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="cluster-tbody">
+        <tr class="loading-row">
+          <td colspan="6">
+            <span class="spinner"></span> Loading clusters…
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<footer>
+  karpx &mdash; Karpenter managed from your terminal &nbsp;|&nbsp;
+  <a href="https://github.com/kemilad/karpx" target="_blank" rel="noopener">GitHub</a>
+  &nbsp;|&nbsp;
+  <a href="https://karpenter.sh" target="_blank" rel="noopener">karpenter.sh</a>
+</footer>
+
+<script>
+  const AUTO_REFRESH_MS = 30_000;
+  let autoTimer = null;
+
+  async function fetchClusters() {
+    const resp = await fetch('/api/clusters');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    return resp.json();
+  }
+
+  function providerBadge(provider) {
+    const map = {
+      aws:   ['badge-aws',   'AWS EKS'],
+      azure: ['badge-azure', 'Azure AKS'],
+      gcp:   ['badge-gcp',   'GCP GKE'],
+    };
+    const [cls, label] = map[provider] || ['badge-unknown', provider || 'Unknown'];
+    return `<span class="badge ${cls}">${label}</span>`;
+  }
+
+  function karpenterBadge(cluster) {
+    if (!cluster.karpenter_installed) {
+      return `<span class="badge badge-none">Not installed</span>`;
+    }
+    const ver = cluster.karpenter_version || '?';
+    const upgrade = cluster.upgrade_available
+      ? `<span class="upgrade-hint">▲ ${cluster.latest_compatible}</span>`
+      : '';
+    return `<span class="version-chip">v${ver}</span>${upgrade}`;
+  }
+
+  function compatBadge(cluster) {
+    if (!cluster.karpenter_installed) return '—';
+    if (cluster.compatible === true)  return `<span class="badge badge-ok">✓ Compatible</span>`;
+    if (cluster.compatible === false) return `<span class="badge badge-err">✗ Incompatible</span>`;
+    return '—';
+  }
+
+  function statusBadge(cluster) {
+    if (cluster.error) return `<span class="badge badge-err" title="${cluster.error}">Error</span>`;
+    if (!cluster.karpenter_installed) return `<span class="badge badge-none">Not installed</span>`;
+    if (cluster.compatible === false) return `<span class="badge badge-err">Upgrade required</span>`;
+    if (cluster.upgrade_available)    return `<span class="badge badge-warn">Upgrade available</span>`;
+    return `<span class="badge badge-ok">Up to date</span>`;
+  }
+
+  function renderTable(clusters) {
+    const tbody = document.getElementById('cluster-tbody');
+
+    if (!clusters || clusters.length === 0) {
+      tbody.innerHTML = `<tr class="loading-row"><td colspan="6">No kubeconfig contexts found.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = clusters.map(c => `
+      <tr>
+        <td><span class="cluster-name">${esc(c.context)}</span></td>
+        <td>${providerBadge(c.provider)}</td>
+        <td class="hide-sm"><span class="version-chip">${esc(c.k8s_version || '—')}</span></td>
+        <td>${karpenterBadge(c)}</td>
+        <td class="hide-sm">${compatBadge(c)}</td>
+        <td>${statusBadge(c)}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderStats(clusters) {
+    const total     = clusters.length;
+    const installed = clusters.filter(c => c.karpenter_installed).length;
+    const upgrades  = clusters.filter(c => c.upgrade_available).length;
+    const incompat  = clusters.filter(c => c.compatible === false).length;
+
+    document.getElementById('stat-total').textContent     = total;
+    document.getElementById('stat-installed').textContent = installed;
+    document.getElementById('stat-upgrades').textContent  = upgrades;
+    document.getElementById('stat-incompat').textContent  = incompat;
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+
+  async function refresh() {
+    clearTimeout(autoTimer);
+    document.getElementById('error-banner').style.display = 'none';
+    document.getElementById('cluster-tbody').innerHTML =
+      `<tr class="loading-row"><td colspan="6"><span class="spinner"></span> Loading…</td></tr>`;
+
+    try {
+      const clusters = await fetchClusters();
+      renderStats(clusters);
+      renderTable(clusters);
+      const now = new Date();
+      document.getElementById('last-updated').textContent =
+        `Updated ${now.toLocaleTimeString()}`;
+    } catch (err) {
+      const banner = document.getElementById('error-banner');
+      banner.textContent = `Could not load clusters: ${err.message}`;
+      banner.style.display = 'block';
+      document.getElementById('cluster-tbody').innerHTML =
+        `<tr class="loading-row"><td colspan="6">Failed to load data.</td></tr>`;
+    }
+
+    autoTimer = setTimeout(refresh, AUTO_REFRESH_MS);
+  }
+
+  // Initial load
+  refresh();
+</script>
+</body>
+</html>

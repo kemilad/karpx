@@ -17,6 +17,7 @@ import (
 	"github.com/kemilad/karpx/internal/kube"
 	"github.com/kemilad/karpx/internal/nodes"
 	"github.com/kemilad/karpx/internal/tui"
+	"github.com/kemilad/karpx/internal/ui"
 )
 
 var version = "dev"
@@ -75,7 +76,7 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVarP(&region,  "region",  "r", "", "AWS region (default: from AWS config)")
 	root.SilenceUsage = true
 
-	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), nodePoolsCmd(), nodesCmd(), versionCmd())
+	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), nodePoolsCmd(), nodesCmd(), uiCmd(), versionCmd())
 	return root
 }
 
@@ -840,6 +841,35 @@ func modeLabelShort(m nodes.OptimizationMode) string {
 	default:
 		return "Balanced (Spot + On-Demand, mixed families)"
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ui command — web dashboard
+// ─────────────────────────────────────────────────────────────────────────────
+
+func uiCmd() *cobra.Command {
+	var kubeCtx string
+	var port    int
+	cmd := &cobra.Command{
+		Use:   "ui",
+		Short: "Open the karpx web dashboard in your browser",
+		Long: `Start a local HTTP server and open the karpx dashboard in your browser.
+
+The dashboard shows all kubeconfig contexts with their cloud provider,
+Kubernetes version, Karpenter installation status, and compatibility badges.
+It refreshes automatically every 30 seconds.
+
+Press Ctrl+C to stop the server.`,
+		Example: `  karpx ui                    # all kubeconfig contexts, port 7654
+  karpx ui -c my-cluster      # single cluster
+  karpx ui --port 9000         # custom port`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return ui.Serve(port, kubeCtx)
+		},
+	}
+	cmd.Flags().StringVarP(&kubeCtx, "context", "c", "",   "kubeconfig context (default: all contexts)")
+	cmd.Flags().IntVar(&port,        "port",        7654,  "local port for the dashboard server")
+	return cmd
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

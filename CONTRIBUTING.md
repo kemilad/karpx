@@ -91,11 +91,15 @@ karpx/
     ├── nodes/
     │   ├── selector.go          # Node type recommendation engine
     │   └── manifest.go          # NodePool + NodeClass YAML generation
-    └── tui/
-        ├── model.go             # Root BubbleTea model + navigation
-        ├── nav.go               # Navigation messages and targets
-        ├── dashboard.go         # Cluster dashboard view
-        └── styles.go            # Colour palette and component styles
+    ├── tui/
+    │   ├── model.go             # Root BubbleTea model + navigation
+    │   ├── nav.go               # Navigation messages and targets
+    │   ├── dashboard.go         # Cluster dashboard view
+    │   └── styles.go            # Colour palette and component styles
+    └── ui/
+        ├── server.go            # Web dashboard HTTP server + /api/clusters
+        └── static/
+            └── index.html       # Embedded dark-themed dashboard (go:embed)
 ```
 
 ## Making changes
@@ -124,6 +128,7 @@ karpx/
 - **TUI install / upgrade views** — replacing the "coming soon" placeholders in `internal/tui/model.go`
 - **NodePool / EC2NodeClass apply via client-go** — instead of shelling out to kubectl
 - **Compatibility matrix updates** — when new Karpenter versions ship, update `internal/compat/matrix.go`
+- **Web UI enhancements** — richer cluster detail views, NodePool management in `internal/ui/`
 - **Tests** — unit tests for `compat`, `nodes/selector`, and `kube/workload` packages
 
 ## Commit conventions
