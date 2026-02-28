@@ -30,7 +30,8 @@ type ClusterEntry struct {
 	Name             string
 	Context          string
 	Region           string
-	K8sVersion       string // cluster Kubernetes version, e.g. "1.30.2"
+	Provider         kube.Provider // detected cloud provider (aws / azure / gcp / unknown)
+	K8sVersion       string        // cluster Kubernetes version, e.g. "1.30.2"
 	Installed        bool
 	Checking         bool
 	ChartVersion     string // installed Karpenter version
@@ -217,15 +218,39 @@ func (m *DashboardModel) renderDetail(c *ClusterEntry) string {
 	var b strings.Builder
 	b.WriteString(SectionTitle("Selected") + "\n")
 
+	meta := c.Provider.Meta()
+	providerLabel := meta.Label
+	if providerLabel == "" {
+		providerLabel = "unknown"
+	}
+	providerLine := StyleNormal.Render(providerLabel)
+	switch meta.SupportLevel {
+	case "full":
+		providerLine += "  " + StyleSuccess.Render("● full support")
+	case "preview":
+		providerLine += "  " + StyleWarning.Render("◐ preview")
+	case "experimental":
+		providerLine += "  " + StyleWarning.Render("◌ experimental")
+	case "unsupported":
+		providerLine += "  " + StyleDanger.Render("✗ no official Karpenter provider")
+	}
+
 	lines := StyleAccent.Render("  context    ") + StyleNormal.Render(c.Context) + "\n" +
+		StyleAccent.Render("  provider   ") + providerLine + "\n" +
 		StyleAccent.Render("  k8s        ") + StyleNormal.Render(dash(c.K8sVersion)) + "\n" +
 		StyleAccent.Render("  karpenter  ") + StyleNormal.Render(dash(c.ChartVersion))
 
+	if c.Provider == kube.ProviderUnknown {
+		lines += "\n" + StyleMuted.Render("  ℹ  run `karpx install` for provider options and guidance")
+	}
 	if c.Incompatible {
 		lines += "\n" + StyleDanger.Render("  ✗ installed version is NOT compatible with this Kubernetes version")
 	}
 	if c.UpgradeNeeded && c.LatestVersion != "" {
 		lines += "\n" + StyleWarning.Render(fmt.Sprintf("  ▲ upgrade available → v%s", c.LatestVersion))
+	}
+	if !c.Installed && c.Provider != kube.ProviderUnknown && meta.DocsURL != "" {
+		lines += "\n" + StyleMuted.Render("  docs: "+meta.DocsURL)
 	}
 
 	b.WriteString(StylePanel.Render(lines) + "\n")
@@ -321,15 +346,19 @@ func loadClusters(preferCtx string) tea.Cmd {
 }
 
 // checkCluster is the core async command that:
-//  1. Detects whether Karpenter is installed (via helm).
-//  2. Fetches the cluster's Kubernetes version.
-//  3. Checks whether the installed Karpenter version is compatible.
-//  4. Fetches the latest compatible Karpenter version from GitHub.
+//  1. Detects the cloud provider (AWS / Azure / GCP / unknown).
+//  2. Detects whether Karpenter is installed (via helm).
+//  3. Fetches the cluster's Kubernetes version.
+//  4. Checks whether the installed Karpenter version is compatible.
+//  5. Fetches the latest compatible Karpenter version from GitHub.
 func checkCluster(c ClusterEntry) tea.Cmd {
 	return func() tea.Msg {
 		c.Checking = false
 
-		// ── Step 1: detect Karpenter via helm ──────────────────────────────
+		// ── Step 1: detect cloud provider ──────────────────────────────────
+		c.Provider = kube.DetectProvider(c.Context)
+
+		// ── Step 2: detect Karpenter via helm ──────────────────────────────
 		info, err := helm.DetectKarpenter(c.Context)
 		if err != nil {
 			c.Error = err.Error()
@@ -340,7 +369,7 @@ func checkCluster(c ClusterEntry) tea.Cmd {
 			c.ChartVersion = info.Version
 		}
 
-		// ── Step 2: get cluster Kubernetes version ──────────────────────────
+		// ── Step 3: get cluster Kubernetes version ──────────────────────────
 		k8sVer, err := kube.GetServerVersion(c.Context)
 		if err != nil {
 			c.Error = "k8s version: " + err.Error()
@@ -348,24 +377,25 @@ func checkCluster(c ClusterEntry) tea.Cmd {
 		}
 		c.K8sVersion = k8sVer
 
-		// ── Step 3: check compatibility ─────────────────────────────────────
-		if c.Installed && c.ChartVersion != "" {
+		// ── Step 4: check compatibility (AWS provider only for now) ─────────
+		if c.Installed && c.ChartVersion != "" && c.Provider == kube.ProviderAWS {
 			c.Incompatible = !compat.IsCompatible(c.ChartVersion, k8sVer)
 			if c.Incompatible {
 				c.UpgradeNeeded = true
 			}
 		}
 
-		// ── Step 4: fetch latest compatible version from GitHub ─────────────
-		latest, _, err := compat.LatestCompatible(k8sVer)
-		if err == nil && latest != "" {
-			c.LatestVersion = latest
-			// Upgrade needed if a newer compatible version exists.
-			if !c.UpgradeNeeded && c.Installed && c.ChartVersion != "" {
-				iv, e1 := parseVer(c.ChartVersion)
-				lv, e2 := parseVer(latest)
-				if e1 == nil && e2 == nil && lv.GreaterThan(iv) {
-					c.UpgradeNeeded = true
+		// ── Step 5: fetch latest compatible version from GitHub ─────────────
+		if c.Provider == kube.ProviderAWS {
+			latest, _, err := compat.LatestCompatible(k8sVer)
+			if err == nil && latest != "" {
+				c.LatestVersion = latest
+				if !c.UpgradeNeeded && c.Installed && c.ChartVersion != "" {
+					iv, e1 := parseVer(c.ChartVersion)
+					lv, e2 := parseVer(latest)
+					if e1 == nil && e2 == nil && lv.GreaterThan(iv) {
+						c.UpgradeNeeded = true
+					}
 				}
 			}
 		}

@@ -1,20 +1,37 @@
 # karpx ⚡
 
-> Karpenter for EKS — managed from your terminal
+> Karpenter — managed from your terminal
 
 ```
   ██╗  ██╗ █████╗ ██████╗ ██████╗ ██╗  ██╗
   ██║ ██╔╝██╔══██╗██╔══██╗██╔══██╗╚██╗██╔╝
-  █████╔╝ ███████║██████╔╝██████╔╝ ╚███╔╝ 
-  ██╔═██╗ ██╔══██║██╔══██╗██╔═══╝  ██╔██╗ 
+  █████╔╝ ███████║██████╔╝██████╔╝ ╚███╔╝
+  ██╔═██╗ ██╔══██║██╔══██╗██╔═══╝  ██╔██╗
   ██║  ██╗██║  ██║██║  ██║██║     ██╔╝ ██╗
   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝
 ```
 
 A single-binary TUI to install, upgrade, and configure [Karpenter](https://karpenter.sh)
-across all your EKS clusters — no YAML, no context-switching, just your terminal.
+across your Kubernetes clusters — no YAML, no context-switching, just your terminal.
 
-## Install
+## Cloud Provider Support
+
+karpx auto-detects your cluster's cloud provider and guides you through the
+correct setup for each platform.
+
+| Provider | Support level | Karpenter provider |
+|---|---|---|
+| **AWS EKS** | ● Full | [aws/karpenter-provider-aws](https://github.com/aws/karpenter-provider-aws) |
+| **Azure AKS** | ◐ Preview | [Azure/karpenter-provider-azure-aks](https://github.com/Azure/karpenter-provider-azure-aks) |
+| **GCP GKE** | ◌ Experimental | [kubernetes-sigs/karpenter-provider-gcp](https://github.com/kubernetes-sigs/karpenter-provider-gcp) |
+| **On-prem / other** | ✗ Not supported | — Karpenter requires cloud provider APIs |
+
+> **On-prem note:** Karpenter cannot run on bare-metal or on-prem clusters because
+> it depends on cloud provider APIs (EC2, Azure VMSS, GCE) to provision nodes.
+> Consider [Cluster Autoscaler](https://github.com/kubernetes/autoscaler) or
+> [KEDA](https://keda.sh) instead.
+
+## Install karpx
 
 ### Homebrew (macOS / Linux) — recommended
 
@@ -33,7 +50,7 @@ Override version or install directory:
 
 ```bash
 VERSION=v0.2.0 INSTALL_DIR=~/.local/bin \
-  curl -fsSL .../install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/kemilad/karpx/main/install.sh | bash
 ```
 
 ### go install
@@ -46,8 +63,6 @@ go install github.com/kemilad/karpx@latest
 
 Download the binary for your platform from [Releases](https://github.com/kemilad/karpx/releases),
 extract it, and place it on your `$PATH`.
-
----
 
 ## Usage
 
@@ -74,15 +89,24 @@ karpx -c my-eks-prod -r ap-southeast-1
 ### Non-interactive (CI / scripting)
 
 ```bash
-# Print the installed Karpenter version.
+# Detect cloud provider, Karpenter version, and compatibility.
 karpx detect -c my-cluster
 
-# Install without TUI.
-karpx install \
+# Install — auto-detects provider and asks questions interactively.
+karpx install -c my-cluster
+
+# Install non-interactively on AWS EKS.
+karpx install --provider aws \
   -c my-cluster \
   --cluster-name my-cluster \
   -r ap-southeast-1 \
   --role-arn arn:aws:iam::123456789012:role/KarpenterController
+
+# Install on Azure AKS (shows guided setup).
+karpx install --provider azure -c my-aks-cluster
+
+# Install on GCP GKE (shows guided setup).
+karpx install --provider gcp -c my-gke-cluster
 
 # Upgrade to the latest compatible version.
 karpx upgrade -c my-cluster
@@ -98,11 +122,29 @@ karpx np -c my-cluster          # short alias
 karpx version
 ```
 
+### Provider detection
+
+karpx detects your cloud provider automatically by inspecting:
+
+1. The kubeconfig server URL (e.g. `*.eks.amazonaws.com`, `*.azmk8s.io`, `*.googleapis.com`)
+2. Node `spec.providerID` as a fallback (requires cluster access)
+
+If detection fails (e.g. private endpoints, custom DNS), pass `--provider` explicitly:
+
+```bash
+karpx install --provider aws   -c <context>
+karpx install --provider azure -c <context>
+karpx install --provider gcp   -c <context>
+```
+
 ## Requirements
 
-- `kubectl` configured (`~/.kube/config`) with your EKS cluster contexts
-- AWS credentials (environment variables, `~/.aws/credentials`, or IAM instance role)
-- Helm is **not** required separately — karpx uses the Helm Go library internally
+- `kubectl` configured (`~/.kube/config`) with your cluster contexts
+- `helm` ≥ 3 on your `$PATH`
+- Cloud credentials appropriate for your provider:
+  - **AWS** — environment variables, `~/.aws/credentials`, or IAM instance role
+  - **Azure** — `az login` or a service principal
+  - **GCP** — `gcloud auth application-default login`
 
 ## How it works
 
@@ -110,9 +152,9 @@ karpx is a single static binary with zero runtime dependencies. Internally it us
 
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) — terminal UI framework
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) — TUI styling
-- [Helm v3 library](https://pkg.go.dev/helm.sh/helm/v3) — programmatic install/upgrade
-- [client-go](https://github.com/kubernetes/client-go) — NodePool/EC2NodeClass CRD operations
-- [AWS SDK v2](https://github.com/aws/aws-sdk-go-v2) — EC2 instance type discovery
+- [client-go](https://github.com/kubernetes/client-go) — cluster version & node detection
+- [GitHub Releases API](https://api.github.com/repos/aws/karpenter-provider-aws/releases) — live version discovery
+- Embedded compatibility matrix sourced from [karpenter.sh/docs/upgrading/compatibility](https://karpenter.sh/docs/upgrading/compatibility/)
 
 Memory footprint is kept under 128 MiB at all times via `GOMEMLIMIT` and a bounded worker pool.
 
