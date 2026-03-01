@@ -166,6 +166,52 @@ func LatestCompatible(k8sVersion string) (latest string, all []string, err error
 // Utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
+// MinCompatibleKarpenter returns the minimum Karpenter version compatible with
+// the given Kubernetes version, derived from the embedded compatibility matrix
+// (no network requests required).
+// Returns "" if no rule in the matrix covers the given Kubernetes version.
+func MinCompatibleKarpenter(k8sVersion string) string {
+	k8sv, err := semver.NewVersion(normalise(k8sVersion))
+	if err != nil {
+		return ""
+	}
+	var minVer *semver.Version
+	for _, rule := range compatMatrix {
+		k8sMin, _ := semver.NewVersion(rule.k8sMin)
+		k8sMax, _ := semver.NewVersion(rule.k8sMax)
+		if k8sv.Compare(k8sMin) < 0 || k8sv.Compare(k8sMax) > 0 {
+			continue
+		}
+		lb := lowerBoundOf(rule.karpenterConstraint)
+		if lb == "" {
+			continue
+		}
+		lv, err := semver.NewVersion(lb)
+		if err != nil {
+			continue
+		}
+		if minVer == nil || lv.LessThan(minVer) {
+			minVer = lv
+		}
+	}
+	if minVer == nil {
+		return ""
+	}
+	return minVer.Original()
+}
+
+// lowerBoundOf parses a semver constraint like ">= 0.37.0, < 1.0.0" and
+// returns the lower bound value ("0.37.0").
+func lowerBoundOf(constraint string) string {
+	for _, part := range strings.Split(constraint, ",") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, ">=") {
+			return strings.TrimSpace(strings.TrimPrefix(part, ">="))
+		}
+	}
+	return ""
+}
+
 // normalise ensures a version string has three dot-separated components.
 func normalise(v string) string {
 	v = strings.TrimPrefix(v, "v")

@@ -88,6 +88,25 @@
     }
     .btn-ghost:hover { border-color: var(--violet-lt); color: var(--violet-lt); }
 
+    .btn-install {
+      background: rgba(124,58,237,0.12);
+      color: var(--violet-lt);
+      border: 1px solid var(--violet);
+      border-radius: 6px;
+      padding: 0.28rem 0.65rem;
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .btn-install:hover:not(:disabled) {
+      background: rgba(124,58,237,0.28);
+    }
+    .btn-install:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
     /* ── Layout ── */
     main {
       max-width: 1200px;
@@ -243,6 +262,39 @@
       font-size: 0.875rem;
     }
 
+    /* ── Toast notifications ── */
+    .toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      padding: 0.75rem 1.2rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      max-width: 420px;
+      z-index: 200;
+      animation: toastIn 0.2s ease;
+      pointer-events: none;
+    }
+    .toast-success {
+      background: rgba(16,185,129,0.15);
+      border: 1px solid var(--green);
+      color: var(--green);
+    }
+    .toast-error {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid var(--red);
+      color: var(--red);
+    }
+    .toast-info {
+      background: rgba(124,58,237,0.15);
+      border: 1px solid var(--violet);
+      color: var(--violet-lt);
+    }
+    @keyframes toastIn {
+      from { transform: translateY(8px); opacity: 0; }
+      to   { transform: translateY(0);   opacity: 1; }
+    }
+
     /* ── Footer ── */
     footer {
       text-align: center;
@@ -321,11 +373,12 @@
           <th>Karpenter</th>
           <th class="hide-sm">Compatibility</th>
           <th>Status</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="cluster-tbody">
         <tr class="loading-row">
-          <td colspan="6">
+          <td colspan="7">
             <span class="spinner"></span> Loading clusters…
           </td>
         </tr>
@@ -367,31 +420,47 @@
     }
     const ver = cluster.karpenter_version || '?';
     const upgrade = cluster.upgrade_available
-      ? `<span class="upgrade-hint">▲ ${cluster.latest_compatible}</span>`
+      ? `<span class="upgrade-hint">▲ ${esc(cluster.latest_compatible)}</span>`
       : '';
-    return `<span class="version-chip">v${ver}</span>${upgrade}`;
+    return `<span class="version-chip">v${esc(ver)}</span>${upgrade}`;
   }
 
   function compatBadge(cluster) {
-    if (!cluster.karpenter_installed) return '—';
+    if (!cluster.karpenter_installed) {
+      // Show minimum compatible Karpenter version from the embedded matrix.
+      if (cluster.provider === 'aws' && cluster.min_compatible) {
+        return `<span class="version-chip" title="Minimum Karpenter version compatible with Kubernetes ${esc(cluster.k8s_version)}">≥ v${esc(cluster.min_compatible)}</span>`;
+      }
+      return '—';
+    }
     if (cluster.compatible === true)  return `<span class="badge badge-ok">✓ Compatible</span>`;
     if (cluster.compatible === false) return `<span class="badge badge-err">✗ Incompatible</span>`;
     return '—';
   }
 
   function statusBadge(cluster) {
-    if (cluster.error) return `<span class="badge badge-err" title="${cluster.error}">Error</span>`;
+    if (cluster.error) return `<span class="badge badge-err" title="${esc(cluster.error)}">Error</span>`;
     if (!cluster.karpenter_installed) return `<span class="badge badge-none">Not installed</span>`;
     if (cluster.compatible === false) return `<span class="badge badge-err">Upgrade required</span>`;
     if (cluster.upgrade_available)    return `<span class="badge badge-warn">Upgrade available</span>`;
     return `<span class="badge badge-ok">Up to date</span>`;
   }
 
+  function actionCell(cluster) {
+    if (!cluster.karpenter_installed && cluster.provider === 'aws' && cluster.latest_compatible) {
+      return `<button class="btn-install"
+                data-action="install"
+                data-context="${esc(cluster.context)}"
+                data-version="${esc(cluster.latest_compatible)}">⚡ Install v${esc(cluster.latest_compatible)}</button>`;
+    }
+    return '<span style="color:var(--muted);font-size:0.75rem">—</span>';
+  }
+
   function renderTable(clusters) {
     const tbody = document.getElementById('cluster-tbody');
 
     if (!clusters || clusters.length === 0) {
-      tbody.innerHTML = `<tr class="loading-row"><td colspan="6">No kubeconfig contexts found.</td></tr>`;
+      tbody.innerHTML = `<tr class="loading-row"><td colspan="7">No kubeconfig contexts found.</td></tr>`;
       return;
     }
 
@@ -403,6 +472,7 @@
         <td>${karpenterBadge(c)}</td>
         <td class="hide-sm">${compatBadge(c)}</td>
         <td>${statusBadge(c)}</td>
+        <td>${actionCell(c)}</td>
       </tr>
     `).join('');
   }
@@ -427,11 +497,64 @@
       .replace(/"/g,'&quot;');
   }
 
+  // ── Toast notifications ──────────────────────────────────────────────────
+  function showToast(msg, type = 'info', durationMs = 5000) {
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), durationMs);
+  }
+
+  // ── Install handler (event delegation) ──────────────────────────────────
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('cluster-tbody').addEventListener('click', async e => {
+      const btn = e.target.closest('[data-action="install"]');
+      if (!btn || btn.disabled) return;
+      await doInstall(btn);
+    });
+  });
+
+  async function doInstall(btn) {
+    const ctx     = btn.dataset.context;
+    const version = btn.dataset.version;
+
+    if (!confirm(`Install Karpenter v${version} on cluster "${ctx}"?\n\nFor AWS EKS, IAM role configuration will be needed for full controller functionality.`)) {
+      return;
+    }
+
+    btn.disabled = true;
+    const origHTML = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;margin-right:0.4rem"></span>Installing…';
+
+    try {
+      const resp = await fetch('/api/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: ctx, version: version }),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        showToast(`✓ Karpenter v${version} installed on ${ctx}`, 'success', 6000);
+        await refresh();
+      } else {
+        showToast(`Install failed: ${result.error || 'unknown error'}`, 'error', 8000);
+        btn.disabled = false;
+        btn.innerHTML = origHTML;
+      }
+    } catch (err) {
+      showToast(`Install error: ${err.message}`, 'error', 8000);
+      btn.disabled = false;
+      btn.innerHTML = origHTML;
+    }
+  }
+
+  // ── Data refresh ─────────────────────────────────────────────────────────
   async function refresh() {
     clearTimeout(autoTimer);
     document.getElementById('error-banner').style.display = 'none';
     document.getElementById('cluster-tbody').innerHTML =
-      `<tr class="loading-row"><td colspan="6"><span class="spinner"></span> Loading…</td></tr>`;
+      `<tr class="loading-row"><td colspan="7"><span class="spinner"></span> Loading…</td></tr>`;
 
     try {
       const clusters = await fetchClusters();
@@ -445,7 +568,7 @@
       banner.textContent = `Could not load clusters: ${err.message}`;
       banner.style.display = 'block';
       document.getElementById('cluster-tbody').innerHTML =
-        `<tr class="loading-row"><td colspan="6">Failed to load data.</td></tr>`;
+        `<tr class="loading-row"><td colspan="7">Failed to load data.</td></tr>`;
     }
 
     autoTimer = setTimeout(refresh, AUTO_REFRESH_MS);
