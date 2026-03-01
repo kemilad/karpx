@@ -1,0 +1,76 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: karpx
+    main: .
+    binary: karpx
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: karpx
+    name_template: "karpx_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - none*
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: kemilad
+    name: karpx
+  draft: false
+  prerelease: auto
+  name_template: "karpx {{.Version}}"
+
+brews:
+  - name: karpx
+    repository:
+      owner: kemilad
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_message_template: "chore: update karpx to {{.Tag}}"
+    homepage: "https://github.com/kemilad/karpx"
+    description: "⚡ Karpenter for EKS — managed from your terminal"
+    license: "Apache-2.0"
+    install: |
+      bin.install "karpx"
+    test: |
+      assert_match "karpx", shell_output("#{bin}/karpx version")
+    caveats: |
+      Run `karpx` to open the interactive TUI.
+
+      Requirements:
+        - kubectl configured with your EKS cluster contexts
+        - AWS credentials (env vars, ~/.aws/credentials, or IAM role)
+
+      Quick start:
+        karpx                          open TUI (current context)
+        karpx -c my-cluster            target a specific cluster
+        karpx -c my-cluster -r us-east-1
