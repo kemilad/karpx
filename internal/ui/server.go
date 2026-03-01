@@ -30,15 +30,30 @@ var staticFiles embed.FS
 
 // ClusterStatus is the JSON payload returned by /api/clusters.
 type ClusterStatus struct {
-	Context           string `json:"context"`
-	Provider          string `json:"provider"`
-	K8sVersion        string `json:"k8s_version"`
-	KarpenterInstalled bool  `json:"karpenter_installed"`
-	KarpenterVersion  string `json:"karpenter_version,omitempty"`
-	Compatible        *bool  `json:"compatible,omitempty"`
-	UpgradeAvailable  bool   `json:"upgrade_available"`
-	LatestCompatible  string `json:"latest_compatible,omitempty"`
-	Error             string `json:"error,omitempty"`
+	Context            string `json:"context"`
+	Provider           string `json:"provider"`
+	K8sVersion         string `json:"k8s_version"`
+	KarpenterInstalled bool   `json:"karpenter_installed"`
+	KarpenterVersion   string `json:"karpenter_version,omitempty"`
+	Compatible         *bool  `json:"compatible,omitempty"`
+	UpgradeAvailable   bool   `json:"upgrade_available"`
+	LatestCompatible   string `json:"latest_compatible,omitempty"`
+	MinCompatible      string `json:"min_compatible,omitempty"`
+	Error              string `json:"error,omitempty"`
+}
+
+// InstallRequest is the JSON body for POST /api/install.
+type InstallRequest struct {
+	Context   string `json:"context"`
+	Version   string `json:"version"`
+	Namespace string `json:"namespace"`
+}
+
+// InstallResponse is the JSON body returned by POST /api/install.
+type InstallResponse struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // Serve starts the dashboard HTTP server on the given port.
@@ -83,11 +98,62 @@ func Serve(port int, kubeCtx string) error {
 		json.NewEncoder(w).Encode(results)
 	})
 
+	mux.HandleFunc("/api/install", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req InstallRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			return
+		}
+		if req.Context == "" || req.Version == "" {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "context and version are required"})
+			return
+		}
+
+		ns := req.Namespace
+		if ns == "" {
+			ns = "karpenter"
+		}
+		ver := strings.TrimPrefix(req.Version, "v")
+
+		args := []string{
+			"install", "karpenter",
+			"oci://public.ecr.aws/karpenter/karpenter",
+			"--version", ver,
+			"--namespace", ns,
+			"--create-namespace",
+			"--kube-context", req.Context,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		out, err := exec.CommandContext(ctx, "helm", args...).CombinedOutput()
+		if err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{
+				Error: fmt.Sprintf("%v\n%s", err, strings.TrimSpace(string(out))),
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(InstallResponse{
+			Success: true,
+			Output:  strings.TrimSpace(string(out)),
+		})
+	})
+
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:        addr,
+		Handler:     mux,
+		ReadTimeout: 10 * time.Second,
+		// WriteTimeout is generous to accommodate the /api/install endpoint,
+		// which shells out to helm and can take several minutes.
+		WriteTimeout: 10 * time.Minute,
 	}
 
 	url := "http://" + addr
@@ -189,14 +255,24 @@ func inspectContext(ctx string) ClusterStatus {
 	}
 
 	// Compatibility + upgrade check (AWS only for now).
-	if info.Installed && provider == kube.ProviderAWS {
-		installed := strings.TrimPrefix(info.Version, "v")
-		ok := compat.IsCompatible(installed, k8sVer)
-		s.Compatible = &ok
+	if provider == kube.ProviderAWS {
+		// Minimum compatible version from the embedded matrix (no network).
+		s.MinCompatible = compat.MinCompatibleKarpenter(k8sVer)
 
+		// Latest compatible version from GitHub (one network call per cluster).
 		latest, _, _ := compat.LatestCompatible(k8sVer)
-		if latest != "" && latest != installed {
-			s.UpgradeAvailable = true
+
+		if info.Installed {
+			installed := strings.TrimPrefix(info.Version, "v")
+			ok := compat.IsCompatible(installed, k8sVer)
+			s.Compatible = &ok
+			if latest != "" && latest != installed {
+				s.UpgradeAvailable = true
+				s.LatestCompatible = latest
+			}
+		} else {
+			// Not installed — surface the latest compatible version for the
+			// install button in the dashboard.
 			s.LatestCompatible = latest
 		}
 	}
