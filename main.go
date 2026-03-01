@@ -207,7 +207,7 @@ func runDetect(kubeCtx string) error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func installCmd() *cobra.Command {
-	var kubeCtx, clusterName, region, roleARN, karpVer, intQueue, providerFlag string
+	var kubeCtx, clusterName, region, roleARN, karpVer, intQueue, providerFlag, namespace string
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install Karpenter — detects cloud provider and guides through setup",
@@ -231,7 +231,7 @@ Supported providers:
     -r ap-southeast-1 \
     --role-arn arn:aws:iam::123456789:role/KarpenterController`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInstall(kubeCtx, providerFlag, clusterName, region, roleARN, karpVer, intQueue)
+			return runInstall(kubeCtx, providerFlag, clusterName, region, roleARN, karpVer, intQueue, namespace)
 		},
 	}
 	cmd.Flags().StringVarP(&kubeCtx,      "context",            "c", "", "kubeconfig context")
@@ -241,10 +241,11 @@ Supported providers:
 	cmd.Flags().StringVar(&roleARN,       "role-arn",               "", "Karpenter controller IAM role ARN (AWS only)")
 	cmd.Flags().StringVar(&karpVer,       "version",                "", "Karpenter version (default: latest compatible)")
 	cmd.Flags().StringVar(&intQueue,      "interruption-queue",     "", "SQS queue name for spot interruption (AWS, optional)")
+	cmd.Flags().StringVarP(&namespace,    "namespace",          "N", "", "namespace to install Karpenter into (default: karpenter; created if missing)")
 	return cmd
 }
 
-func runInstall(kubeCtx, providerFlag, clusterName, region, roleARN, karpVer, intQueue string) error {
+func runInstall(kubeCtx, providerFlag, clusterName, region, roleARN, karpVer, intQueue, namespace string) error {
 	printSection("Step 1: Detecting cloud provider")
 
 	// ── Resolve provider ──────────────────────────────────────────────────
@@ -308,21 +309,39 @@ func runInstall(kubeCtx, providerFlag, clusterName, region, roleARN, karpVer, in
 	}
 	fmt.Printf("  Karpenter is not installed — proceeding.\n")
 
+	// ── Step 3: Installation namespace ───────────────────────────────────
+	fmt.Println()
+	printSection("Step 3: Installation namespace")
+	namespace = askIfEmpty(namespace, "Namespace to install Karpenter into", "karpenter")
+	if namespace == "" {
+		namespace = "karpenter"
+	}
+	fmt.Printf("  Checking namespace %q…\n", namespace)
+	nsStatus, err := kube.EnsureNamespace(kubeCtx, namespace)
+	if err != nil {
+		return fmt.Errorf("namespace setup: %w", err)
+	}
+	if nsStatus == kube.NamespaceCreated {
+		fmt.Printf("  ✓  Namespace %q created.\n", namespace)
+	} else {
+		fmt.Printf("  ✓  Namespace %q already exists.\n", namespace)
+	}
+
 	// ── Provider-specific install flow ────────────────────────────────────
 	switch provider {
 	case kube.ProviderAWS:
-		return runInstallAWS(kubeCtx, clusterName, region, roleARN, karpVer, intQueue)
+		return runInstallAWS(kubeCtx, namespace, clusterName, region, roleARN, karpVer, intQueue)
 	case kube.ProviderAzure:
-		return runInstallAzure(kubeCtx, karpVer)
+		return runInstallAzure(kubeCtx, namespace, karpVer)
 	case kube.ProviderGCP:
-		return runInstallGCP(kubeCtx, karpVer)
+		return runInstallGCP(kubeCtx, namespace, karpVer)
 	}
 	return nil
 }
 
 // ── AWS EKS install flow ──────────────────────────────────────────────────────
 
-func runInstallAWS(kubeCtx, clusterName, region, roleARN, karpVer, intQueue string) error {
+func runInstallAWS(kubeCtx, namespace, clusterName, region, roleARN, karpVer, intQueue string) error {
 	fmt.Println()
 	printSection("Step 3: Cluster information (AWS EKS)")
 
@@ -383,6 +402,7 @@ func runInstallAWS(kubeCtx, clusterName, region, roleARN, karpVer, intQueue stri
 	printSection("Summary")
 	fmt.Printf("  Provider        : AWS EKS\n")
 	fmt.Printf("  Context         : %s\n", contextOrCurrent(kubeCtx))
+	fmt.Printf("  Namespace       : %s\n", namespace)
 	fmt.Printf("  Cluster name    : %s\n", clusterName)
 	fmt.Printf("  Region          : %s\n", region)
 	fmt.Printf("  Role ARN        : %s\n", roleARN)
@@ -409,14 +429,14 @@ func runInstallAWS(kubeCtx, clusterName, region, roleARN, karpVer, intQueue stri
 		applyOrSaveManifest(manifest, kubeCtx)
 	}
 
-	fmt.Printf("\n  Installing Karpenter %s on AWS EKS…\n", karpVer)
+	fmt.Printf("\n  Installing Karpenter %s on AWS EKS into namespace %q…\n", karpVer, namespace)
 	fmt.Printf("  (helm install wiring coming in next release)\n\n")
 	return nil
 }
 
 // ── Azure AKS install flow ────────────────────────────────────────────────────
 
-func runInstallAzure(kubeCtx, karpVer string) error {
+func runInstallAzure(kubeCtx, namespace, karpVer string) error {
 	meta := kube.ProviderAzure.Meta()
 	fmt.Println()
 	printSection("Step 3: Azure AKS — Karpenter (Preview)")
@@ -445,7 +465,7 @@ func runInstallAzure(kubeCtx, karpVer string) error {
 	fmt.Println()
 	fmt.Printf("  Sample install command:\n\n")
 	fmt.Printf("    helm install karpenter %s \\\n", meta.ChartRepo)
-	fmt.Printf("      --namespace karpenter --create-namespace \\\n")
+	fmt.Printf("      --namespace %s \\\n", namespace)
 	if karpVer != "" {
 		fmt.Printf("      --version %s \\\n", strings.TrimPrefix(karpVer, "v"))
 	}
@@ -461,7 +481,7 @@ func runInstallAzure(kubeCtx, karpVer string) error {
 
 // ── GCP GKE install flow ──────────────────────────────────────────────────────
 
-func runInstallGCP(kubeCtx, karpVer string) error {
+func runInstallGCP(kubeCtx, namespace, karpVer string) error {
 	meta := kube.ProviderGCP.Meta()
 	fmt.Println()
 	printSection("Step 3: GCP GKE — Karpenter (Experimental)")
@@ -487,7 +507,7 @@ func runInstallGCP(kubeCtx, karpVer string) error {
 	fmt.Println()
 	fmt.Printf("  Sample install command:\n\n")
 	fmt.Printf("    helm install karpenter %s \\\n", meta.ChartRepo)
-	fmt.Printf("      --namespace karpenter --create-namespace \\\n")
+	fmt.Printf("      --namespace %s \\\n", namespace)
 	if karpVer != "" {
 		fmt.Printf("      --version %s\n\n", strings.TrimPrefix(karpVer, "v"))
 	}
