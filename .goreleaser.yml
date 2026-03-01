@@ -55,7 +55,6 @@ brews:
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
-    commit_message_template: "chore: update karpx to {{.Tag}}"
     homepage: "https://github.com/kemilad/karpx"
     description: "⚡ Karpenter for EKS — managed from your terminal"
     license: "Apache-2.0"
