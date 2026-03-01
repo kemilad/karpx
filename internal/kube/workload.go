@@ -48,7 +48,7 @@ func AnalyzeWorkloads(kubeCtx string) (*WorkloadProfile, error) {
 	nsSet := map[string]struct{}{}
 
 	// ── Running pods ───────────────────────────────────────────────────────
-	pods, err := cs.CoreV1().Pods().List(context.TODO(), metav1.ListOptions{
+	pods, err := cs.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
 		FieldSelector: "status.phase=Running",
 	})
 	if err != nil {
@@ -87,10 +87,10 @@ func AnalyzeWorkloads(kubeCtx string) (*WorkloadProfile, error) {
 	p.Namespaces = len(nsSet)
 
 	// ── Batch jobs ─────────────────────────────────────────────────────────
-	if jobs, err := cs.BatchV1().Jobs().List(context.TODO(), metav1.ListOptions{}); err == nil && len(jobs.Items) > 0 {
+	if jobs, err := cs.BatchV1().Jobs("").List(context.TODO(), metav1.ListOptions{}); err == nil && len(jobs.Items) > 0 {
 		p.HasBatchJobs = true
 	}
-	if crons, err := cs.BatchV1().CronJobs().List(context.TODO(), metav1.ListOptions{}); err == nil && len(crons.Items) > 0 {
+	if crons, err := cs.BatchV1().CronJobs("").List(context.TODO(), metav1.ListOptions{}); err == nil && len(crons.Items) > 0 {
 		p.HasBatchJobs = true
 	}
 
