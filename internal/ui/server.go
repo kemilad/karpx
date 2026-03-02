@@ -32,6 +32,7 @@ var staticFiles embed.FS
 type ClusterStatus struct {
 	Context            string `json:"context"`
 	Provider           string `json:"provider"`
+	DocsURL            string `json:"docs_url,omitempty"`
 	K8sVersion         string `json:"k8s_version"`
 	KarpenterInstalled bool   `json:"karpenter_installed"`
 	KarpenterVersion   string `json:"karpenter_version,omitempty"`
@@ -232,6 +233,7 @@ func inspectContext(ctx string) ClusterStatus {
 	// Provider.
 	provider := kube.DetectProvider(ctx)
 	s.Provider = string(provider)
+	s.DocsURL = provider.Meta().DocsURL
 
 	// Kubernetes version (with a short timeout).
 	k8sVer, err := withTimeout(5*time.Second, func() (string, error) {

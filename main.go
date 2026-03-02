@@ -76,7 +76,7 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVarP(&region,  "region",  "r", "", "AWS region (default: from AWS config)")
 	root.SilenceUsage = true
 
-	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), nodePoolsCmd(), nodesCmd(), uiCmd(), versionCmd())
+	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), uninstallCmd(), nodePoolsCmd(), nodesCmd(), uiCmd(), versionCmd())
 	return root
 }
 
@@ -599,6 +599,93 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 
 	fmt.Printf("\n  Upgrading Karpenter to %s…\n", targetVer)
 	fmt.Printf("  (helm upgrade wiring coming in next release)\n\n")
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// uninstall command — remove Karpenter from a cluster via helm
+// ─────────────────────────────────────────────────────────────────────────────
+
+func uninstallCmd() *cobra.Command {
+	var kubeCtx  string
+	var deleteNs bool
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Uninstall Karpenter from a cluster",
+		Long: `Uninstall Karpenter from a Kubernetes cluster using Helm.
+
+The Karpenter controller is removed, but NodePool and EC2NodeClass custom
+resources are NOT deleted automatically — remove them manually if needed.`,
+		Example: "  karpx uninstall -c my-cluster\n  karpx uninstall -c my-cluster --delete-namespace",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runUninstall(kubeCtx, deleteNs)
+		},
+	}
+	cmd.Flags().StringVarP(&kubeCtx, "context", "c", "", "kubeconfig context")
+	cmd.Flags().BoolVar(&deleteNs, "delete-namespace", false, "also delete the Karpenter namespace after uninstall")
+	return cmd
+}
+
+func runUninstall(kubeCtx string, deleteNs bool) error {
+	fmt.Printf("\n  karpx uninstall  context:%s\n\n", contextOrCurrent(kubeCtx))
+
+	// ── Detect installed Karpenter ────────────────────────────────────────
+	info, err := helm.DetectKarpenter(kubeCtx)
+	if err != nil || !info.Installed {
+		fmt.Printf("  Karpenter is not installed on this cluster.\n\n")
+		return nil
+	}
+
+	releaseName := info.ReleaseName
+	if releaseName == "" {
+		releaseName = "karpenter"
+	}
+
+	fmt.Printf("  Release     : %s\n", releaseName)
+	fmt.Printf("  Version     : v%s\n", info.Version)
+	fmt.Printf("  Namespace   : %s\n\n", info.Namespace)
+	fmt.Printf("  ⚠  This removes the Karpenter controller.\n")
+	fmt.Printf("     NodePool / EC2NodeClass resources are NOT deleted automatically.\n\n")
+
+	if !confirmPrompt("  Proceed with uninstall? [y/N] ") {
+		fmt.Printf("  Cancelled.\n\n")
+		return nil
+	}
+
+	// ── helm uninstall ────────────────────────────────────────────────────
+	args := []string{"uninstall", releaseName, "--namespace", info.Namespace}
+	if kubeCtx != "" {
+		args = append(args, "--kube-context", kubeCtx)
+	}
+
+	fmt.Printf("\n  Uninstalling Karpenter…\n")
+	helmCmd := exec.Command("helm", args...)
+	helmCmd.Stdout = os.Stdout
+	helmCmd.Stderr = os.Stderr
+	if err := helmCmd.Run(); err != nil {
+		return fmt.Errorf("helm uninstall failed: %w", err)
+	}
+	fmt.Printf("\n  ✓  Karpenter uninstalled.\n")
+
+	// ── Optionally delete the namespace ───────────────────────────────────
+	if deleteNs {
+		fmt.Printf("  Deleting namespace %q…\n", info.Namespace)
+		nsArgs := []string{"delete", "namespace", info.Namespace}
+		if kubeCtx != "" {
+			nsArgs = append(nsArgs, "--context", kubeCtx)
+		}
+		nsCmd := exec.Command("kubectl", nsArgs...)
+		nsCmd.Stdout = os.Stdout
+		nsCmd.Stderr = os.Stderr
+		if err := nsCmd.Run(); err != nil {
+			fmt.Printf("  ⚠  Could not delete namespace: %v\n", err)
+		} else {
+			fmt.Printf("  ✓  Namespace %q deleted.\n", info.Namespace)
+		}
+	}
+
+	fmt.Printf("\n  To remove remaining CRDs:\n")
+	fmt.Printf("    kubectl delete nodepools,ec2nodeclasses --all\n\n")
 	return nil
 }
 
