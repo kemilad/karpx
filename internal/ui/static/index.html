@@ -447,11 +447,25 @@
   }
 
   function actionCell(cluster) {
-    if (!cluster.karpenter_installed && cluster.provider === 'aws' && cluster.latest_compatible) {
+    if (cluster.karpenter_installed) {
+      return '<span style="color:var(--muted);font-size:0.75rem">—</span>';
+    }
+    if (cluster.provider === 'aws') {
+      if (cluster.latest_compatible) {
+        return `<button class="btn-install"
+                  data-action="install"
+                  data-context="${esc(cluster.context)}"
+                  data-version="${esc(cluster.latest_compatible)}">⚡ Install v${esc(cluster.latest_compatible)}</button>`;
+      }
+      // latest_compatible not yet resolved (GitHub API pending/rate-limited) —
+      // show a button that prompts the user to enter a version.
       return `<button class="btn-install"
-                data-action="install"
-                data-context="${esc(cluster.context)}"
-                data-version="${esc(cluster.latest_compatible)}">⚡ Install v${esc(cluster.latest_compatible)}</button>`;
+                data-action="install-prompt"
+                data-context="${esc(cluster.context)}">⚡ Install…</button>`;
+    }
+    if ((cluster.provider === 'azure' || cluster.provider === 'gcp') && cluster.docs_url) {
+      return `<a class="btn-install" href="${esc(cluster.docs_url)}"
+               target="_blank" rel="noopener">Setup Guide →</a>`;
     }
     return '<span style="color:var(--muted);font-size:0.75rem">—</span>';
   }
@@ -509,8 +523,20 @@
   // ── Install handler (event delegation) ──────────────────────────────────
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('cluster-tbody').addEventListener('click', async e => {
-      const btn = e.target.closest('[data-action="install"]');
+      const btn = e.target.closest('[data-action="install"], [data-action="install-prompt"]');
       if (!btn || btn.disabled) return;
+
+      if (btn.dataset.action === 'install-prompt') {
+        const ver = window.prompt(
+          'Enter the Karpenter version to install (e.g. 1.3.0).\n' +
+          'Check compatible versions at https://karpenter.sh/docs/upgrading/compatibility/',
+          ''
+        );
+        if (!ver || !ver.trim()) return;
+        btn.dataset.version = ver.trim().replace(/^v/, '');
+        btn.dataset.action  = 'install';
+      }
+
       await doInstall(btn);
     });
   });

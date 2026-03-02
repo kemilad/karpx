@@ -12,10 +12,11 @@ import (
 
 // Info describes the Karpenter installation found (or not) on a cluster.
 type Info struct {
-	Installed bool
-	Version   string // Karpenter app version, e.g. "1.2.1"
-	Namespace string
-	Chart     string
+	Installed   bool
+	ReleaseName string // helm release name, e.g. "karpenter"
+	Version     string // Karpenter app version, e.g. "1.2.1"
+	Namespace   string
+	Chart       string
 }
 
 type helmRelease struct {
@@ -52,10 +53,11 @@ func DetectKarpenter(kubeCtx string) (*Info, error) {
 	for _, r := range releases {
 		if isKarpenterRelease(r) {
 			return &Info{
-				Installed: true,
-				Version:   strings.TrimPrefix(r.AppVersion, "v"),
-				Namespace: r.Namespace,
-				Chart:     r.Chart,
+				Installed:   true,
+				ReleaseName: r.Name,
+				Version:     strings.TrimPrefix(r.AppVersion, "v"),
+				Namespace:   r.Namespace,
+				Chart:       r.Chart,
 			}, nil
 		}
 	}

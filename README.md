@@ -98,6 +98,17 @@ Stop it with `Ctrl+C`.
 | `Esc` | Go back |
 | `q` | Quit |
 
+### Web dashboard install button
+
+The `karpx ui` dashboard shows an **Install** button in the Actions column
+for clusters where Karpenter is not yet installed:
+
+| Provider | Button behaviour |
+|----------|-----------------|
+| **AWS EKS** | Shows the latest compatible version; clicking runs `helm install` automatically. If version resolution fails (e.g. GitHub rate-limit), the button still appears and prompts you to enter a version. |
+| **Azure AKS** | Shows a **Setup Guide →** link to the Microsoft AKS Karpenter docs. |
+| **GCP GKE** | Shows a **Setup Guide →** link to the GKE Karpenter provider docs. |
+
 ### Node type optimisation
 
 `karpx nodes` analyses your running workloads and asks one question:
@@ -146,6 +157,12 @@ karpx upgrade -c my-cluster
 # Upgrade to a specific version.
 karpx upgrade -c my-cluster --version v1.3.0
 
+# Uninstall Karpenter from a cluster.
+karpx uninstall -c my-cluster
+
+# Uninstall and also delete the Karpenter namespace.
+karpx uninstall -c my-cluster --delete-namespace
+
 # Analyse workloads and generate an optimised NodePool manifest.
 karpx nodes -c my-cluster
 karpx nodes -c my-cluster --mode cost        # cost-optimised (Spot + Graviton)
@@ -172,6 +189,27 @@ If detection fails (e.g. private endpoints, custom DNS), pass `--provider` expli
 karpx install --provider aws   -c <context>
 karpx install --provider azure -c <context>
 karpx install --provider gcp   -c <context>
+```
+
+## Uninstall karpx
+
+### Homebrew
+
+```bash
+brew uninstall karpx
+brew untap kemilad/tap   # optional — removes the tap entirely
+```
+
+### curl / manual install
+
+```bash
+rm "$(which karpx)"
+```
+
+### go install
+
+```bash
+rm "$(go env GOPATH)/bin/karpx"
 ```
 
 ## Requirements
