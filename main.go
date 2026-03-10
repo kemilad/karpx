@@ -18,6 +18,7 @@ import (
 	"github.com/kemilad/karpx/internal/nodes"
 	"github.com/kemilad/karpx/internal/tui"
 	"github.com/kemilad/karpx/internal/ui"
+	karpupgrade "github.com/kemilad/karpx/internal/upgrade"
 )
 
 var version = "dev"
@@ -598,7 +599,8 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 		fmt.Printf("    Run `karpx install` to install it.\n\n")
 		return nil
 	}
-	fmt.Printf("  Installed version   : v%s\n", info.Version)
+	installed := strings.TrimPrefix(info.Version, "v")
+	fmt.Printf("  Installed version : v%s\n", installed)
 
 	// ── Get Kubernetes version ────────────────────────────────────────────
 	k8sVer, err := kube.GetServerVersion(kubeCtx)
@@ -606,29 +608,29 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 		fmt.Printf("  ✗ Could not get cluster Kubernetes version: %v\n\n", err)
 		return err
 	}
-	fmt.Printf("  Kubernetes version  : %s\n", k8sVer)
+	fmt.Printf("  Kubernetes        : %s\n", k8sVer)
 
-	// ── Resolve target version ────────────────────────────────────────────
-	if targetVer == "" {
-		fmt.Printf("\n  Fetching latest compatible version from GitHub…\n")
-		latest, all, err := compat.LatestCompatible(k8sVer)
-		if err != nil {
-			fmt.Printf("  ✗ Could not fetch latest version: %v\n\n", err)
-			return err
-		}
-		if latest == "" {
-			fmt.Printf("  ✗ No compatible Karpenter version found for Kubernetes %s.\n\n", k8sVer)
-			return nil
-		}
-		fmt.Printf("  Latest compatible   : v%s\n", latest)
-		if len(all) > 1 {
-			fmt.Printf("  All compatible      : %s\n", formatVersionList(all, 5))
-		}
-		targetVer = "v" + latest
+	// ── Resolve target version + fetch all available ──────────────────────
+	fmt.Printf("\n  Fetching compatible versions from GitHub…\n")
+	latest, allVersions, err := compat.LatestCompatible(k8sVer)
+	if err != nil {
+		fmt.Printf("  ✗ Could not fetch versions: %v\n\n", err)
+		return err
+	}
+	if latest == "" {
+		fmt.Printf("  ✗ No compatible Karpenter version found for Kubernetes %s.\n\n", k8sVer)
+		return nil
 	}
 
-	installed := strings.TrimPrefix(info.Version, "v")
-	target    := strings.TrimPrefix(targetVer, "v")
+	if targetVer == "" {
+		targetVer = "v" + latest
+	}
+	target := strings.TrimPrefix(targetVer, "v")
+
+	fmt.Printf("  Latest compatible : v%s\n", latest)
+	if len(allVersions) > 1 {
+		fmt.Printf("  All compatible    : %s\n", formatVersionList(allVersions, 5))
+	}
 
 	if installed == target {
 		fmt.Printf("\n  ✓  Already on %s — nothing to do.\n\n", targetVer)
@@ -636,40 +638,66 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 	}
 
 	if !compat.IsCompatible(target, k8sVer) {
-		fmt.Printf("\n  ✗ %s is NOT compatible with Kubernetes %s.\n", targetVer, k8sVer)
-		fmt.Printf("    Choose a version from the compatible list above.\n\n")
+		fmt.Printf("\n  ✗ %s is NOT compatible with Kubernetes %s.\n\n", targetVer, k8sVer)
 		return fmt.Errorf("version %s incompatible with k8s %s", targetVer, k8sVer)
 	}
 
-	fmt.Printf("\n  Upgrade v%s → %s  (reuse-values: %v)\n", installed, targetVer, reuseVals)
-	if !confirmPrompt("  Proceed with upgrade? [y/N] ") {
+	// ── Build and display upgrade path ────────────────────────────────────
+	path, err := karpupgrade.BuildPath(installed, target, allVersions)
+	if err != nil {
+		return err
+	}
+	if len(path) > 1 {
+		fmt.Printf("\n  Upgrade path  : v%s → %s\n", installed, "v"+strings.Join(path, " → v"))
+		fmt.Printf("  (upgrading one minor version at a time for safety)\n")
+	} else {
+		fmt.Printf("\n  Upgrade       : v%s → v%s\n", installed, target)
+	}
+
+	if !confirmPrompt("\n  Proceed with zero-downtime upgrade? [y/N] ") {
 		fmt.Printf("  Cancelled.\n\n")
 		return nil
 	}
+	fmt.Printf("\n")
 
-	fmt.Printf("\n  Upgrading Karpenter to %s…\n", targetVer)
+	// ── Execute zero-downtime upgrade ─────────────────────────────────────
+	stepNum := 0
+	reporter := func(s karpupgrade.Step) {
+		if s.Err != "" {
+			fmt.Printf("  ✗ %s\n    %s\n", s.Name, s.Err)
+			return
+		}
+		if !s.OK {
+			// "in progress" notification — just print the name
+			stepNum++
+			if s.Detail != "" {
+				fmt.Printf("  [%d] %s  (%s)\n", stepNum, s.Name, s.Detail)
+			} else {
+				fmt.Printf("  [%d] %s\n", stepNum, s.Name)
+			}
+			return
+		}
+		if s.Detail != "" {
+			fmt.Printf("      ✓ %s\n", s.Detail)
+		} else {
+			fmt.Printf("      ✓ done\n")
+		}
+	}
 
-	ver := strings.TrimPrefix(targetVer, "v")
-	helmArgs := []string{
-		"upgrade", "karpenter",
-		"oci://public.ecr.aws/karpenter/karpenter",
-		"--version", ver,
-		"--namespace", info.Namespace,
-	}
-	if reuseVals {
-		helmArgs = append(helmArgs, "--reuse-values")
-	}
-	if kubeCtx != "" {
-		helmArgs = append(helmArgs, "--kube-context", kubeCtx)
+	if err := karpupgrade.Run(karpupgrade.Params{
+		KubeCtx:     kubeCtx,
+		Namespace:   info.Namespace,
+		ReleaseName: info.ReleaseName,
+		Current:     installed,
+		Target:      target,
+		AllVersions: allVersions,
+		ReuseValues: reuseVals,
+	}, reporter); err != nil {
+		fmt.Printf("\n  ✗ Upgrade failed: %v\n\n", err)
+		return err
 	}
 
-	helmCmd := exec.Command("helm", helmArgs...)
-	helmCmd.Stdout = os.Stdout
-	helmCmd.Stderr = os.Stderr
-	if err := helmCmd.Run(); err != nil {
-		return fmt.Errorf("helm upgrade failed: %w", err)
-	}
-	fmt.Printf("\n  ✓  Karpenter upgraded to %s successfully.\n\n", targetVer)
+	fmt.Printf("\n  ✓  Karpenter upgraded to v%s successfully.\n\n", target)
 	return nil
 }
 
