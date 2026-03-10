@@ -467,6 +467,14 @@
       return `<a class="btn-install" href="${esc(cluster.docs_url)}"
                target="_blank" rel="noopener">Setup Guide →</a>`;
     }
+    // Provider detection failed or unknown — still show install button so the
+    // user can proceed (common when the EKS endpoint doesn't expose standard
+    // eks.amazonaws.com markers or node lookup times out).
+    if (!cluster.error) {
+      return `<button class="btn-install"
+                data-action="install-prompt"
+                data-context="${esc(cluster.context)}">⚡ Install…</button>`;
+    }
     return '<span style="color:var(--muted);font-size:0.75rem">—</span>';
   }
 
@@ -541,9 +549,23 @@
     });
   });
 
+  // Extract a short cluster name from an EKS context string.
+  // Handles ARN format (arn:aws:eks:region:account:cluster/name) and plain names.
+  function clusterNameFromContext(ctx) {
+    const arnMatch = ctx.match(/\/([^/]+)$/);
+    return arnMatch ? arnMatch[1] : ctx;
+  }
+
   async function doInstall(btn) {
     const ctx     = btn.dataset.context;
     const version = btn.dataset.version;
+
+    const suggested = clusterNameFromContext(ctx);
+    const clusterName = window.prompt(
+      `Enter the EKS cluster name for settings.clusterName:`,
+      suggested
+    );
+    if (!clusterName || !clusterName.trim()) return;
 
     if (!confirm(`Install Karpenter v${version} on cluster "${ctx}"?\n\nFor AWS EKS, IAM role configuration will be needed for full controller functionality.`)) {
       return;
@@ -557,7 +579,7 @@
       const resp = await fetch('/api/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: ctx, version: version }),
+        body: JSON.stringify({ context: ctx, version: version, cluster_name: clusterName.trim() }),
       });
       const result = await resp.json();
       if (result.success) {
