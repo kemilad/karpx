@@ -191,6 +191,87 @@ karpx install --provider azure -c <context>
 karpx install --provider gcp   -c <context>
 ```
 
+## Testing Karpenter before going to production
+
+Before rolling out Karpenter on a production cluster, validate that node
+provisioning, scaling, and consolidation all work correctly using the
+included load-test manifest.
+
+### Quick start
+
+```bash
+# 1. Apply the load test (50 pods, 500m CPU + 512Mi memory each)
+kubectl apply -f https://raw.githubusercontent.com/kemilad/karpx/main/karpx-load-test.yaml
+
+# 2. Watch Karpenter provision new nodes in real time
+kubectl get nodes -w
+
+# 3. Watch pods schedule onto the new nodes
+kubectl get pods -l app=karpx-load-test -w
+
+# 4. Inspect Karpenter's provisioning decisions
+kubectl logs -n karpenter -l app.kubernetes.io/name=karpenter -f \
+  | grep -E "provisioned|launched|NodeClaim|nodeclaim"
+
+# 5. Clean up — Karpenter consolidates and terminates the nodes automatically
+kubectl delete -f https://raw.githubusercontent.com/kemilad/karpx/main/karpx-load-test.yaml
+kubectl get nodes -w   # watch nodes drain and terminate (~1–2 min)
+```
+
+### What to expect
+
+| Stage | What happens | Typical time |
+|-------|-------------|-------------|
+| Apply | 50 pods go `Pending` — no capacity on existing nodes | instant |
+| Provisioning | Karpenter evaluates instance types and creates NodeClaims | ~10–20 s |
+| Node ready | New EC2 nodes appear (`NotReady` → `Ready`) | ~45–90 s |
+| Pods running | All 50 pods schedule and go `Running` | ~15 s after node ready |
+| Delete | Pods removed, Karpenter drains and terminates nodes | ~60–90 s |
+
+With the default `500m` CPU / `512Mi` memory per pod, 50 replicas require
+roughly **25 CPU cores** — on `t3.medium` (2 vCPU) that means ~13 new nodes,
+giving you a clear picture of Karpenter's bin-packing and spot-selection logic.
+
+### Scale up to stress test further
+
+```bash
+# Double the load
+kubectl scale deployment karpx-load-test --replicas=100
+
+# Watch Karpenter add more nodes to handle the extra demand
+kubectl get nodes -w
+```
+
+### Validate consolidation
+
+After deleting some pods, Karpenter should consolidate workloads onto fewer
+nodes and terminate the now-empty ones (consolidation policy is set by your
+NodePool — `WhenEmptyOrUnderutilized` for Balanced/Cost, `WhenEmpty` for
+High-Performance):
+
+```bash
+# Scale down to 10 pods and watch nodes consolidate
+kubectl scale deployment karpx-load-test --replicas=10
+kubectl get nodes -w
+```
+
+### Pre-production checklist
+
+Before promoting Karpenter to production verify:
+
+- [ ] New nodes appear within 90 seconds of pods going `Pending`
+- [ ] All 50 pods reach `Running` state
+- [ ] Node labels include `karpenter.sh/nodepool: karpx-default`
+- [ ] After cleanup, all Karpenter-provisioned nodes terminate (no orphaned nodes)
+- [ ] Karpenter controller logs show no `ERROR` lines during the test
+- [ ] `kubectl get nodeclaims` shows claims created and then deleted cleanly
+
+```bash
+# Quick health check — should show no errors
+kubectl logs -n karpenter -l app.kubernetes.io/name=karpenter \
+  --since=10m | grep ERROR
+```
+
 ## Uninstall karpx
 
 ### Homebrew
