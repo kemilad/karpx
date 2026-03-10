@@ -101,6 +101,7 @@ type NodePoolDetail struct {
 // NodeClassDetail is a single EC2NodeClass with status, returned by /api/nodepools.
 type NodeClassDetail struct {
 	Name        string `json:"name"`
+	Role        string `json:"role,omitempty"`
 	Ready       bool   `json:"ready"`
 	NotReadyMsg string `json:"not_ready_msg,omitempty"`
 }
@@ -390,6 +391,7 @@ func Serve(port int, kubeCtx string) error {
 			} `json:"metadata"`
 			Spec struct {
 				Limits map[string]string `json:"limits"`
+				Role   string            `json:"role"`
 			} `json:"spec"`
 			Status struct {
 				Conditions []k8sCond `json:"conditions"`
@@ -461,6 +463,7 @@ func Serve(port int, kubeCtx string) error {
 					ready, msg := readyStatus(m)
 					resp.NodeClasses = append(resp.NodeClasses, NodeClassDetail{
 						Name:        m.Metadata.Name,
+						Role:        m.Spec.Role,
 						Ready:       ready,
 						NotReadyMsg: msg,
 					})
