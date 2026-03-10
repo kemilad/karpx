@@ -84,10 +84,12 @@ resolve_version() {
     return
   fi
   step "Resolving latest release..."
-  (VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep '"tag_name"' | head -1 \
-    | sed 's/.*"tag_name": *"\(.*\)".*/\1/') && echo "$VERSION" > /tmp/karpx_ver) &
-  spinner $! "Fetching from GitHub API"
+  # Use the HTML redirect (no API rate limits) — github.com/releases/latest
+  # redirects to the actual release URL which contains the tag in the path.
+  (curl -fsSL -o /dev/null -w "%{url_effective}" \
+    "https://github.com/$REPO/releases/latest" 2>/dev/null \
+    | sed 's|.*/tag/||' > /tmp/karpx_ver) &
+  spinner $! "Fetching latest release tag"
   wait
   VERSION="$(cat /tmp/karpx_ver 2>/dev/null || true)"
   rm -f /tmp/karpx_ver
