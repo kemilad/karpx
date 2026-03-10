@@ -306,6 +306,42 @@
       transition: all 0.15s;
     }
     .btn-download:hover { background: rgba(6,182,212,0.22); }
+    .btn-import {
+      background: rgba(245,158,11,0.1);
+      color: var(--amber);
+      border: 1px solid rgba(245,158,11,0.4);
+      border-radius: 6px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-import:hover { background: rgba(245,158,11,0.22); }
+    .btn-validate {
+      background: rgba(107,114,128,0.1);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-validate:hover:not(:disabled) { border-color: var(--violet-lt); color: var(--violet-lt); }
+    .btn-validate:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .validate-result {
+      margin-top: 0.6rem;
+      padding: 0.5rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      white-space: pre-wrap;
+      word-break: break-all;
+      display: none;
+    }
+    .validate-result.ok  { background: rgba(16,185,129,0.1);  border: 1px solid rgba(16,185,129,0.3);  color: var(--green); }
+    .validate-result.err { background: rgba(239,68,68,0.08);  border: 1px solid rgba(239,68,68,0.3);   color: var(--red); }
     .btn-generate {
       background: rgba(124,58,237,0.15);
       color: var(--violet-lt);
@@ -725,16 +761,30 @@
       </div>
     </div>
 
+    <div class="modal-section" style="margin-top:0.4rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.4rem">
+        <span class="modal-section-title" style="margin:0">Manifest</span>
+        <span style="display:flex;gap:0.4rem">
+          <button class="btn-import" onclick="document.getElementById('manifest-file-input').click()">↑ Import YAML</button>
+          <input type="file" id="manifest-file-input" accept=".yaml,.yml,.json" style="display:none"
+                 onchange="importManifestFile(this)" />
+        </span>
+      </div>
+    </div>
+
     <div id="manifest-section" style="display:none">
       <div class="modal-section">
         <div class="modal-section-title">Why these instances</div>
         <ul class="reasoning-list" id="reasoning-list"></ul>
       </div>
       <div class="modal-section">
-        <div class="modal-section-title">Generated Manifest</div>
-        <textarea class="manifest-area" id="manifest-area" spellcheck="false"></textarea>
-        <div class="modal-actions">
+        <div class="modal-section-title">Manifest</div>
+        <textarea class="manifest-area" id="manifest-area" spellcheck="false"
+                  oninput="clearValidationResult()"></textarea>
+        <div id="validate-result" class="validate-result"></div>
+        <div class="modal-actions" style="margin-top:0.6rem">
           <button class="btn-apply" id="btn-apply" onclick="doApplyManifest()">✓ Apply to Cluster</button>
+          <button class="btn-validate" id="btn-validate" onclick="validateManifest()">⊙ Validate</button>
           <button class="btn-download" onclick="downloadManifest()">↓ Download YAML</button>
         </div>
       </div>
@@ -1199,6 +1249,7 @@
     document.getElementById('manifest-section').style.display = 'none';
     document.getElementById('reasoning-list').innerHTML = '';
     document.getElementById('manifest-area').value = '';
+    clearValidationResult();
 
     // Show/hide AWS fields
     const awsFields = document.getElementById('aws-fields');
@@ -1357,6 +1408,68 @@
     } finally {
       applyBtn.disabled = false;
       applyBtn.textContent = '✓ Apply to Cluster';
+    }
+  }
+
+  // ── Import YAML ───────────────────────────────────────────────────────────
+  function importManifestFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const content = e.target.result;
+      document.getElementById('manifest-area').value = content;
+      document.getElementById('manifest-section').style.display = '';
+      document.getElementById('reasoning-list').innerHTML =
+        '<li style="color:var(--muted)">Imported from file — edit as needed before applying</li>';
+      clearValidationResult();
+      // Auto-validate on import
+      validateManifest();
+    };
+    reader.readAsText(file);
+    // Reset so same file can be re-imported
+    input.value = '';
+  }
+
+  function clearValidationResult() {
+    const el = document.getElementById('validate-result');
+    el.style.display = 'none';
+    el.className = 'validate-result';
+    el.textContent = '';
+  }
+
+  async function validateManifest() {
+    const manifest = document.getElementById('manifest-area').value;
+    if (!manifest.trim()) { showToast('Manifest is empty', 'error'); return; }
+
+    const btn = document.getElementById('btn-validate');
+    btn.disabled = true;
+    btn.textContent = 'Validating…';
+
+    const result = document.getElementById('validate-result');
+
+    try {
+      const resp = await fetch('/api/nodes/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _nodesCtx, manifest }),
+      });
+      const data = await resp.json();
+      result.style.display = 'block';
+      if (data.success) {
+        result.className = 'validate-result ok';
+        result.textContent = '✓ Valid — dry-run passed\n' + (data.output || '');
+      } else {
+        result.className = 'validate-result err';
+        result.textContent = '✗ Validation failed\n' + (data.error || 'unknown error');
+      }
+    } catch (err) {
+      result.style.display = 'block';
+      result.className = 'validate-result err';
+      result.textContent = '✗ ' + err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '⊙ Validate';
     }
   }
 

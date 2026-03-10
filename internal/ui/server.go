@@ -516,6 +516,38 @@ func Serve(port int, kubeCtx string) error {
 		})
 	})
 
+	// ── Validate NodePool manifest (dry-run) ────────────────────────────────
+	mux.HandleFunc("/api/nodes/validate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req ApplyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			return
+		}
+		if strings.TrimSpace(req.Manifest) == "" {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "manifest is empty"})
+			return
+		}
+		args := []string{"apply", "--dry-run=server", "-f", "-"}
+		if req.Context != "" {
+			args = append(args, "--context", req.Context)
+		}
+		cmd := exec.CommandContext(r.Context(), "kubectl", args...)
+		cmd.Stdin = strings.NewReader(req.Manifest)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: strings.TrimSpace(string(out))})
+			return
+		}
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
+	})
+
 	// ── Apply NodePool manifest ─────────────────────────────────────────────
 	mux.HandleFunc("/api/nodes/apply", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
