@@ -855,6 +855,11 @@
     return m ? { region: m[1], clusterName: m[2] } : { region: '', clusterName: ctx };
   }
 
+  // Extract short cluster name from a context string or EKS ARN.
+  function clusterNameFromContext(ctx) {
+    return parseEksContext(ctx).clusterName;
+  }
+
   async function doInstall(btn) {
     const ctx     = btn.dataset.context;
     const version = btn.dataset.version;
