@@ -1,0 +1,43 @@
+# karpx-load-test.yaml
+# Deploys 50 lightweight pods with resource requests sized to force
+# Karpenter to spin up multiple new nodes.
+#
+# Apply:   kubectl apply -f karpx-load-test.yaml
+# Watch:   kubectl get nodes -w
+# Cleanup: kubectl delete -f karpx-load-test.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: karpx-load-test
+  labels:
+    app: karpx-load-test
+spec:
+  replicas: 50
+  selector:
+    matchLabels:
+      app: karpx-load-test
+  template:
+    metadata:
+      labels:
+        app: karpx-load-test
+    spec:
+      # Target nodes provisioned by Karpenter (not system nodes)
+      nodeSelector:
+        karpenter.sh/nodepool: karpx-default
+      tolerations:
+        - key: karpenter.sh/nodepool
+          operator: Exists
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: load
+          image: public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
