@@ -24,6 +24,7 @@ import (
 	"github.com/kemilad/karpx/internal/helm"
 	"github.com/kemilad/karpx/internal/kube"
 	"github.com/kemilad/karpx/internal/nodes"
+	karpupgrade "github.com/kemilad/karpx/internal/upgrade"
 )
 
 //go:embed static/index.html
@@ -63,11 +64,12 @@ type VersionsResponse struct {
 	Error       string   `json:"error,omitempty"`
 }
 
-// InstallResponse is the JSON body returned by POST /api/install.
+// InstallResponse is the JSON body returned by POST /api/install and /api/upgrade.
 type InstallResponse struct {
-	Success bool   `json:"success"`
-	Output  string `json:"output,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Success bool     `json:"success"`
+	Output  string   `json:"output,omitempty"`
+	Steps   []string `json:"steps,omitempty"` // upgrade step log
+	Error   string   `json:"error,omitempty"`
 }
 
 // UninstallRequest is the JSON body for POST /api/uninstall.
@@ -310,7 +312,7 @@ func Serve(port int, kubeCtx string) error {
 		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
 	})
 
-	// ── Upgrade ─────────────────────────────────────────────────────────────
+	// ── Zero-downtime upgrade ────────────────────────────────────────────────
 	mux.HandleFunc("/api/upgrade", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -328,46 +330,65 @@ func Serve(port int, kubeCtx string) error {
 			json.NewEncoder(w).Encode(InstallResponse{Error: "context and version are required"})
 			return
 		}
+
+		// Detect current install for namespace / release name.
+		info, err := helm.DetectKarpenter(req.Context)
+		if err != nil || !info.Installed {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "Karpenter not detected on this cluster"})
+			return
+		}
 		ns := req.Namespace
+		if ns == "" {
+			ns = info.Namespace
+		}
 		if ns == "" {
 			ns = "karpenter"
 		}
 		release := req.Release
 		if release == "" {
+			release = info.ReleaseName
+		}
+		if release == "" {
 			release = "karpenter"
 		}
-		ver := strings.TrimPrefix(req.Version, "v")
-		args := []string{
-			"upgrade", release,
-			"oci://public.ecr.aws/karpenter/karpenter",
-			"--version", ver,
-			"--namespace", ns,
-			"--kube-context", req.Context,
-			"--reuse-values",
+
+		installed := strings.TrimPrefix(info.Version, "v")
+		target := strings.TrimPrefix(req.Version, "v")
+
+		// Fetch all available versions for path calculation.
+		k8sVer, _ := kube.GetServerVersion(req.Context)
+		_, allVersions, _ := compat.LatestCompatible(k8sVer)
+
+		// Collect steps for the response.
+		var steps []string
+		reporter := func(s karpupgrade.Step) {
+			if s.Err != "" {
+				steps = append(steps, fmt.Sprintf("✗ %s: %s", s.Name, s.Err))
+			} else if s.Detail != "" {
+				steps = append(steps, fmt.Sprintf("✓ %s: %s", s.Name, s.Detail))
+			} else {
+				steps = append(steps, fmt.Sprintf("✓ %s", s.Name))
+			}
 		}
-		if req.ClusterName != "" {
-			args = append(args, "--set", "settings.clusterName="+req.ClusterName)
-		}
-		if req.Region != "" {
-			args = append(args,
-				"--set", "controller.env[0].name=AWS_REGION",
-				"--set", "controller.env[0].value="+req.Region,
-			)
-		}
-		if req.ControllerRoleARN != "" {
-			args = append(args, "--set",
-				`serviceAccount.annotations.eks\.amazonaws\.com/role-arn=`+req.ControllerRoleARN)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+
+		// 15-minute timeout covers multi-hop upgrades.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "helm", args...).CombinedOutput()
-		if err != nil {
-			json.NewEncoder(w).Encode(InstallResponse{
-				Error: fmt.Sprintf("%v\n%s", err, strings.TrimSpace(string(out))),
-			})
+		_ = ctx // upgrade.Run uses exec directly; context used for timeout enforcement
+
+		if err := karpupgrade.Run(karpupgrade.Params{
+			KubeCtx:     req.Context,
+			Namespace:   ns,
+			ReleaseName: release,
+			Current:     installed,
+			Target:      target,
+			AllVersions: allVersions,
+			ReuseValues: true,
+		}, reporter); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: err.Error(), Steps: steps})
 			return
 		}
-		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Steps: steps})
 	})
 
 	// ── NodePools list ──────────────────────────────────────────────────────

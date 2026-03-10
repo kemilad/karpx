@@ -1171,11 +1171,16 @@
     const ns      = btn.dataset.namespace || 'karpenter';
     const release = btn.dataset.release   || 'karpenter';
 
-    const parsed = parseEksContext(ctx);
-    const region = window.prompt(`AWS region (needed to preserve controller env):`, parsed.region);
-    if (region === null) return; // cancelled
-
-    if (!confirm(`Upgrade Karpenter to v${version} on "${ctx}"?`)) return;
+    if (!confirm(
+      `Zero-downtime upgrade to v${version} on:\n${ctx}\n\n` +
+      `This will:\n` +
+      `  1. Apply updated CRDs (helm show crds)\n` +
+      `  2. Scale to 2 replicas for HA during rollover\n` +
+      `  3. Run helm upgrade --reuse-values\n` +
+      `  4. Verify rollout health\n` +
+      `  5. Restore original replica count\n\n` +
+      `If upgrading across multiple minor versions, each hop runs sequentially.\n\nProceed?`
+    )) return;
 
     btn.disabled = true;
     const orig = btn.innerHTML;
@@ -1185,14 +1190,14 @@
       const resp = await fetch('/api/upgrade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: ctx, version, namespace: ns, release, region: region.trim() }),
+        body: JSON.stringify({ context: ctx, version, namespace: ns, release }),
       });
       const result = await resp.json();
       if (result.success) {
-        showToast(`✓ Karpenter upgraded to v${version}`, 'success', 6000);
+        showUpgradeResult(ctx, version, result.steps || [], true);
         await refresh();
       } else {
-        showToast(`Upgrade failed: ${result.error || 'unknown error'}`, 'error', 8000);
+        showUpgradeResult(ctx, version, result.steps || [], false, result.error);
         btn.disabled = false;
         btn.innerHTML = orig;
       }
@@ -1201,6 +1206,36 @@
       btn.disabled = false;
       btn.innerHTML = orig;
     }
+  }
+
+  function showUpgradeResult(ctx, version, steps, success, errMsg) {
+    // Show steps in a toast-style panel at bottom of screen
+    const existing = document.getElementById('upgrade-result-panel');
+    if (existing) existing.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'upgrade-result-panel';
+    panel.style.cssText = `
+      position:fixed; bottom:1.5rem; right:1.5rem; z-index:300;
+      background:var(--surface); border:1px solid ${success ? 'var(--green)' : 'var(--red)'};
+      border-radius:10px; padding:1rem 1.2rem; max-width:460px; max-height:60vh;
+      overflow-y:auto; font-size:0.78rem; font-family:var(--mono);
+      box-shadow:0 4px 24px rgba(0,0,0,0.4);
+    `;
+    const title = success
+      ? `<div style="color:var(--green);font-weight:700;margin-bottom:0.6rem">✓ Upgraded to v${esc(version)}</div>`
+      : `<div style="color:var(--red);font-weight:700;margin-bottom:0.6rem">✗ Upgrade failed</div>`;
+    const stepLines = steps.map(s => {
+      const color = s.startsWith('✓') ? 'var(--green)' : s.startsWith('✗') ? 'var(--red)' : 'var(--text-dim)';
+      return `<div style="color:${color};padding:0.1rem 0">${esc(s)}</div>`;
+    }).join('');
+    const errLine = errMsg ? `<div style="color:var(--red);margin-top:0.4rem">${esc(errMsg)}</div>` : '';
+    const closeBtn = `<button onclick="document.getElementById('upgrade-result-panel').remove()"
+      style="position:absolute;top:0.6rem;right:0.8rem;background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem">✕</button>`;
+    panel.innerHTML = closeBtn + title + stepLines + errLine;
+    document.body.appendChild(panel);
+    // Auto-dismiss after 30s on success
+    if (success) setTimeout(() => panel.remove(), 30000);
   }
 
   // ── Uninstall ─────────────────────────────────────────────────────────────
