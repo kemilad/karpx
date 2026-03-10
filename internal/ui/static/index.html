@@ -738,6 +738,7 @@
         <button class="btn-mode active" data-mode="balanced" onclick="selectMode(this)">⚖ Balanced</button>
         <button class="btn-mode" data-mode="cost" onclick="selectMode(this)">💰 Cost-Optimized</button>
         <button class="btn-mode" data-mode="performance" onclick="selectMode(this)">⚡ High-Performance</button>
+        <button class="btn-mode" data-mode="freetier" onclick="selectMode(this)">🆓 Free-Tier</button>
       </div>
     </div>
 
@@ -984,10 +985,11 @@
       cost:        '💰 Cost-Optimized',
       performance: '⚡ High-Performance',
       balanced:    '⚖ Balanced',
+      freetier:    '🆓 Free-Tier',
     };
     if (!mode) return '<span style="color:var(--muted)">—</span>';
     const label = map[mode] || mode;
-    const colorMap = { cost: 'var(--green)', performance: 'var(--cyan)', balanced: 'var(--violet-lt)' };
+    const colorMap = { cost: 'var(--green)', performance: 'var(--cyan)', balanced: 'var(--violet-lt)', freetier: 'var(--amber)' };
     const color = colorMap[mode] || 'var(--text-dim)';
     return `<span style="color:${color};white-space:nowrap">${esc(label)}</span>`;
   }

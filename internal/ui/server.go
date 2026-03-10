@@ -522,6 +522,8 @@ func Serve(port int, kubeCtx string) error {
 			mode = nodes.ModeCostOptimized
 		case "performance":
 			mode = nodes.ModeHighPerformance
+		case "freetier":
+			mode = nodes.ModeFreeTier
 		default:
 			mode = nodes.ModeBalanced
 		}

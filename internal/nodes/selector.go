@@ -13,9 +13,10 @@ import (
 type OptimizationMode string
 
 const (
-	ModeCostOptimized  OptimizationMode = "cost"
-	ModeBalanced       OptimizationMode = "balanced"
+	ModeCostOptimized   OptimizationMode = "cost"
+	ModeBalanced        OptimizationMode = "balanced"
 	ModeHighPerformance OptimizationMode = "performance"
+	ModeFreeTier        OptimizationMode = "freetier"
 )
 
 // Recommendation holds all parameters needed to generate a NodePool manifest.
@@ -152,6 +153,18 @@ func buildAWS(r *Recommendation, p *kube.WorkloadProfile, wtype kube.WorkloadTyp
 				"No Spot to eliminate interruptions for latency-sensitive services",
 			)
 		}
+
+	case ModeFreeTier:
+		// AWS free-tier eligible instance families only: c7i-flex, m7i-flex, t3, t3a, t4g
+		// On-demand only — spot is not available for free-tier eligible instances
+		r.CapacityTypes = []string{"on-demand"}
+		r.Architectures = []string{"amd64", "arm64"}
+		r.InstanceFamilies = []string{"m7i-flex", "c7i-flex", "t3", "t3a", "t4g"}
+		r.Reasoning = addReasons(r.Reasoning,
+			"Free-tier eligible instances only — m7i-flex (8 GiB), c7i-flex (4 GiB), t3/t3a/t4g",
+			"Suitable for AWS accounts with free-tier or instance-type restrictions",
+			"On-demand only; spot is not supported on free-tier eligible instance families",
+		)
 
 	default: // balanced
 		r.CapacityTypes = []string{"spot", "on-demand"}
