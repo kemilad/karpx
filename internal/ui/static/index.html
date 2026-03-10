@@ -549,23 +549,29 @@
     });
   });
 
-  // Extract a short cluster name from an EKS context string.
-  // Handles ARN format (arn:aws:eks:region:account:cluster/name) and plain names.
-  function clusterNameFromContext(ctx) {
-    const arnMatch = ctx.match(/\/([^/]+)$/);
-    return arnMatch ? arnMatch[1] : ctx;
+  // Parse fields from an EKS context ARN: arn:aws:eks:region:account:cluster/name
+  function parseEksContext(ctx) {
+    const m = ctx.match(/^arn:aws:eks:([^:]+):[^:]+:cluster\/(.+)$/);
+    return m ? { region: m[1], clusterName: m[2] } : { region: '', clusterName: ctx };
   }
 
   async function doInstall(btn) {
     const ctx     = btn.dataset.context;
     const version = btn.dataset.version;
 
-    const suggested = clusterNameFromContext(ctx);
+    const parsed = parseEksContext(ctx);
+
     const clusterName = window.prompt(
       `Enter the EKS cluster name for settings.clusterName:`,
-      suggested
+      parsed.clusterName
     );
     if (!clusterName || !clusterName.trim()) return;
+
+    const region = window.prompt(
+      `Enter the AWS region (e.g. us-east-1):`,
+      parsed.region
+    );
+    if (!region || !region.trim()) return;
 
     if (!confirm(`Install Karpenter v${version} on cluster "${ctx}"?\n\nFor AWS EKS, IAM role configuration will be needed for full controller functionality.`)) {
       return;
@@ -579,7 +585,7 @@
       const resp = await fetch('/api/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: ctx, version: version, cluster_name: clusterName.trim() }),
+        body: JSON.stringify({ context: ctx, version: version, cluster_name: clusterName.trim(), region: region.trim() }),
       });
       const result = await resp.json();
       if (result.success) {

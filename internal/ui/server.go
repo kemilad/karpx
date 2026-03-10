@@ -49,6 +49,7 @@ type InstallRequest struct {
 	Version     string `json:"version"`
 	Namespace   string `json:"namespace"`
 	ClusterName string `json:"cluster_name"`
+	Region      string `json:"region"`
 }
 
 // InstallResponse is the JSON body returned by POST /api/install.
@@ -113,8 +114,8 @@ func Serve(port int, kubeCtx string) error {
 			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
 			return
 		}
-		if req.Context == "" || req.Version == "" || req.ClusterName == "" {
-			json.NewEncoder(w).Encode(InstallResponse{Error: "context, version, and cluster_name are required"})
+		if req.Context == "" || req.Version == "" || req.ClusterName == "" || req.Region == "" {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "context, version, cluster_name, and region are required"})
 			return
 		}
 
@@ -132,6 +133,8 @@ func Serve(port int, kubeCtx string) error {
 			"--create-namespace",
 			"--kube-context", req.Context,
 			"--set", "settings.clusterName=" + req.ClusterName,
+			"--set", "controller.env[0].name=AWS_REGION",
+			"--set", "controller.env[0].value=" + req.Region,
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
