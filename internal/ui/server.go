@@ -23,6 +23,7 @@ import (
 	"github.com/kemilad/karpx/internal/compat"
 	"github.com/kemilad/karpx/internal/helm"
 	"github.com/kemilad/karpx/internal/kube"
+	"github.com/kemilad/karpx/internal/nodes"
 )
 
 //go:embed static/index.html
@@ -30,17 +31,19 @@ var staticFiles embed.FS
 
 // ClusterStatus is the JSON payload returned by /api/clusters.
 type ClusterStatus struct {
-	Context            string `json:"context"`
-	Provider           string `json:"provider"`
-	DocsURL            string `json:"docs_url,omitempty"`
-	K8sVersion         string `json:"k8s_version"`
-	KarpenterInstalled bool   `json:"karpenter_installed"`
-	KarpenterVersion   string `json:"karpenter_version,omitempty"`
-	Compatible         *bool  `json:"compatible,omitempty"`
-	UpgradeAvailable   bool   `json:"upgrade_available"`
-	LatestCompatible   string `json:"latest_compatible,omitempty"`
-	MinCompatible      string `json:"min_compatible,omitempty"`
-	Error              string `json:"error,omitempty"`
+	Context              string `json:"context"`
+	Provider             string `json:"provider"`
+	DocsURL              string `json:"docs_url,omitempty"`
+	K8sVersion           string `json:"k8s_version"`
+	KarpenterInstalled   bool   `json:"karpenter_installed"`
+	KarpenterVersion     string `json:"karpenter_version,omitempty"`
+	KarpenterNamespace   string `json:"karpenter_namespace,omitempty"`
+	KarpenterRelease     string `json:"karpenter_release,omitempty"`
+	Compatible           *bool  `json:"compatible,omitempty"`
+	UpgradeAvailable     bool   `json:"upgrade_available"`
+	LatestCompatible     string `json:"latest_compatible,omitempty"`
+	MinCompatible        string `json:"min_compatible,omitempty"`
+	Error                string `json:"error,omitempty"`
 }
 
 // InstallRequest is the JSON body for POST /api/install.
@@ -57,6 +60,43 @@ type InstallResponse struct {
 	Success bool   `json:"success"`
 	Output  string `json:"output,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// UninstallRequest is the JSON body for POST /api/uninstall.
+type UninstallRequest struct {
+	Context   string `json:"context"`
+	Namespace string `json:"namespace"`
+	Release   string `json:"release"`
+}
+
+// NodePoolListResponse is returned by GET /api/nodepools.
+type NodePoolListResponse struct {
+	NodePools []string `json:"node_pools"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// RecommendRequest is the JSON body for POST /api/nodes/recommend.
+type RecommendRequest struct {
+	Context     string `json:"context"`
+	Mode        string `json:"mode"`
+	ClusterName string `json:"cluster_name"`
+	RoleARN     string `json:"role_arn"`
+}
+
+// RecommendResponse is returned by POST /api/nodes/recommend.
+type RecommendResponse struct {
+	Manifest   string   `json:"manifest"`
+	Reasoning  []string `json:"reasoning"`
+	Families   []string `json:"families"`
+	Capacities []string `json:"capacities"`
+	Archs      []string `json:"architectures"`
+	Error      string   `json:"error,omitempty"`
+}
+
+// ApplyRequest is the JSON body for POST /api/nodes/apply.
+type ApplyRequest struct {
+	Context  string `json:"context"`
+	Manifest string `json:"manifest"`
 }
 
 // Serve starts the dashboard HTTP server on the given port.
@@ -151,6 +191,143 @@ func Serve(port int, kubeCtx string) error {
 			Success: true,
 			Output:  strings.TrimSpace(string(out)),
 		})
+	})
+
+	// ── Uninstall ───────────────────────────────────────────────────────────
+	mux.HandleFunc("/api/uninstall", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req UninstallRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			return
+		}
+		if req.Context == "" {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "context is required"})
+			return
+		}
+		release := req.Release
+		if release == "" {
+			release = "karpenter"
+		}
+		ns := req.Namespace
+		if ns == "" {
+			ns = "karpenter"
+		}
+		args := []string{"uninstall", release, "--namespace", ns, "--kube-context", req.Context}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "helm", args...).CombinedOutput()
+		if err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: fmt.Sprintf("%v\n%s", err, strings.TrimSpace(string(out)))})
+			return
+		}
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
+	})
+
+	// ── NodePools list ──────────────────────────────────────────────────────
+	mux.HandleFunc("/api/nodepools", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		kubeCtxParam := r.URL.Query().Get("context")
+		args := []string{"get", "nodepools", "-o", "name"}
+		if kubeCtxParam != "" {
+			args = append(args, "--context", kubeCtxParam)
+		}
+		out, err := exec.CommandContext(r.Context(), "kubectl", args...).CombinedOutput()
+		outStr := strings.TrimSpace(string(out))
+		if err != nil || strings.Contains(outStr, "No resources found") || strings.Contains(outStr, "no matches for kind") {
+			json.NewEncoder(w).Encode(NodePoolListResponse{NodePools: []string{}})
+			return
+		}
+		var names []string
+		for _, line := range strings.Split(outStr, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				// strip "nodepool.karpenter.sh/" prefix if present
+				if i := strings.LastIndex(line, "/"); i >= 0 {
+					line = line[i+1:]
+				}
+				names = append(names, line)
+			}
+		}
+		json.NewEncoder(w).Encode(NodePoolListResponse{NodePools: names})
+	})
+
+	// ── Node recommendation ─────────────────────────────────────────────────
+	mux.HandleFunc("/api/nodes/recommend", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req RecommendRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(RecommendResponse{Error: "invalid request body"})
+			return
+		}
+
+		provider := kube.DetectProvider(req.Context)
+		profile, err := kube.AnalyzeWorkloads(req.Context)
+		if err != nil {
+			profile = &kube.WorkloadProfile{NoRequests: true}
+		}
+
+		var mode nodes.OptimizationMode
+		switch req.Mode {
+		case "cost":
+			mode = nodes.ModeCostOptimized
+		case "performance":
+			mode = nodes.ModeHighPerformance
+		default:
+			mode = nodes.ModeBalanced
+		}
+
+		rec := nodes.Build(profile, mode, provider)
+		manifest := nodes.GenerateManifest(rec, req.ClusterName, req.RoleARN)
+		json.NewEncoder(w).Encode(RecommendResponse{
+			Manifest:   manifest,
+			Reasoning:  rec.Reasoning,
+			Families:   rec.InstanceFamilies,
+			Capacities: rec.CapacityTypes,
+			Archs:      rec.Architectures,
+		})
+	})
+
+	// ── Apply NodePool manifest ─────────────────────────────────────────────
+	mux.HandleFunc("/api/nodes/apply", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req ApplyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			return
+		}
+		args := []string{"apply", "-f", "-"}
+		if req.Context != "" {
+			args = append(args, "--context", req.Context)
+		}
+		cmd := exec.CommandContext(r.Context(), "kubectl", args...)
+		cmd.Stdin = strings.NewReader(req.Manifest)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: fmt.Sprintf("%v\n%s", err, strings.TrimSpace(string(out)))})
+			return
+		}
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
 	})
 
 	srv := &http.Server{
@@ -259,6 +436,11 @@ func inspectContext(ctx string) ClusterStatus {
 	s.KarpenterInstalled = info.Installed
 	if info.Installed {
 		s.KarpenterVersion = strings.TrimPrefix(info.Version, "v")
+		s.KarpenterNamespace = info.Namespace
+		s.KarpenterRelease = info.ReleaseName
+		if s.KarpenterRelease == "" {
+			s.KarpenterRelease = "karpenter"
+		}
 	}
 
 	// Compatibility + upgrade check (AWS only for now).
