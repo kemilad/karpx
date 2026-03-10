@@ -159,7 +159,7 @@ func (m *NodePoolsModel) View() string {
 			         StyleTableHeader.Render("READY"),
 		)
 		b.WriteString(hdr + "\n")
-		b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", min(m.width-4, 40))) + "\n")
+		b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", max(0, min(m.width-4, 40)))) + "\n")
 
 		for _, nc := range m.nodeClasses {
 			ready := StyleSuccess.Render("✓")
