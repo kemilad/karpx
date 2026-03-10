@@ -28,12 +28,24 @@ func GenerateManifest(r Recommendation, clusterName, roleARN string) string {
 // AWS EKS — NodePool + EC2NodeClass
 // ─────────────────────────────────────────────────────────────────────────────
 
+// roleNameFromARN extracts the short role name from a full IAM ARN.
+// If the value is already a short name it is returned unchanged.
+// e.g. "arn:aws:iam::123:role/MyRole" → "MyRole"
+func roleNameFromARN(s string) string {
+	if idx := strings.LastIndex(s, "/"); idx >= 0 {
+		return s[idx+1:]
+	}
+	return s
+}
+
 func generateAWSManifest(r Recommendation, clusterName, roleARN string) string {
 	if clusterName == "" {
 		clusterName = "<CLUSTER_NAME>"
 	}
-	if roleARN == "" {
-		roleARN = "<KARPENTER_NODE_ROLE_ARN>"
+	// EC2NodeClass spec.role requires the short IAM role name, not the ARN.
+	roleName := roleNameFromARN(roleARN)
+	if roleName == "" {
+		roleName = "<KARPENTER_NODE_ROLE_NAME>"
 	}
 
 	families := quotedList(r.InstanceFamilies)
@@ -131,7 +143,7 @@ spec:
   tags:
     ManagedBy: karpx
     OptimizationMode: "%s"
-`, roleARN, clusterName, clusterName, string(r.Mode))
+`, roleName, clusterName, clusterName, string(r.Mode))
 
 	return header + nodepool + nodeclass
 }
