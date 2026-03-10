@@ -642,7 +642,12 @@
       <input type="text" id="im-k8s-ver" readonly style="opacity:0.6" />
     </div>
     <div class="install-modal-field">
-      <label>Karpenter version</label>
+      <label>Karpenter version &nbsp;
+        <a href="https://karpenter.sh/docs/upgrading/compatibility/" target="_blank" rel="noopener"
+           style="color:var(--cyan);font-size:0.7rem;font-weight:400;text-decoration:none">
+          ↗ compatibility matrix
+        </a>
+      </label>
       <select id="im-version-select" onchange="onInstallVersionChange()">
         <option value="">Loading compatible versions…</option>
       </select>
@@ -651,7 +656,7 @@
     <div class="install-modal-field" id="im-custom-wrap" style="display:none">
       <label>Custom version (e.g. 1.2.3)</label>
       <input type="text" id="im-custom-version" placeholder="1.2.3"
-             oninput="onCustomVersionInput()" />
+             oninput="onCustomVersionInput(this.value)" />
       <div id="im-custom-hint" class="hint"></div>
     </div>
     <div class="install-modal-field">
@@ -1005,17 +1010,36 @@
         : '';
   }
 
-  function onCustomVersionInput() {
-    const raw = document.getElementById('im-custom-version').value.trim().replace(/^v/, '');
+  let _compatCheckTimer = null;
+  function onCustomVersionInput(raw) {
+    raw = (raw || '').trim().replace(/^v/, '');
     const hint = document.getElementById('im-custom-hint');
     if (!raw || !_installK8sVer) { hint.textContent = ''; return; }
-    if (_installCompatible.length > 0) {
-      const ok = _installCompatible.includes(raw);
-      hint.className = `hint ${ok ? '' : 'err'}`;
-      hint.textContent = ok
-        ? `✓ v${raw} is compatible with Kubernetes ${_installK8sVer}`
-        : `✗ v${raw} is NOT compatible with Kubernetes ${_installK8sVer}. Recommended: v${_installCompatible[0]}`;
-    }
+
+    hint.className = 'hint';
+    hint.textContent = 'Checking…';
+    clearTimeout(_compatCheckTimer);
+    _compatCheckTimer = setTimeout(async () => {
+      try {
+        const r = await fetch(
+          `/api/check-compat?k8s=${encodeURIComponent(_installK8sVer)}&karpenter=${encodeURIComponent(raw)}`
+        );
+        const data = await r.json();
+        if (data.compatible) {
+          hint.className = 'hint';
+          hint.style.color = 'var(--green)';
+          hint.textContent = `✓ v${raw} is compatible with Kubernetes ${_installK8sVer}`;
+        } else {
+          hint.className = 'hint err';
+          hint.style.color = '';
+          const rec = _installCompatible[0] || '';
+          hint.textContent = `✗ v${raw} is NOT compatible with Kubernetes ${_installK8sVer}${rec ? '. Recommended: v' + rec : ''}`;
+        }
+      } catch {
+        hint.className = 'hint';
+        hint.textContent = '';
+      }
+    }, 400);
   }
 
   async function doInstallFromModal() {

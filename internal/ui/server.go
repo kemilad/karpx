@@ -178,6 +178,20 @@ func Serve(port int, kubeCtx string) error {
 		json.NewEncoder(w).Encode(results)
 	})
 
+	// ── Instant compatibility check (embedded matrix, no network) ──────────
+	mux.HandleFunc("/api/check-compat", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		k8sVer := r.URL.Query().Get("k8s")
+		karpVer := r.URL.Query().Get("karpenter")
+		if k8sVer == "" || karpVer == "" {
+			json.NewEncoder(w).Encode(map[string]any{"error": "k8s and karpenter params required"})
+			return
+		}
+		ok := compat.IsCompatible(karpVer, k8sVer)
+		json.NewEncoder(w).Encode(map[string]any{"compatible": ok, "k8s": k8sVer, "karpenter": karpVer})
+	})
+
 	// ── Compatible versions for a K8s version ──────────────────────────────
 	mux.HandleFunc("/api/versions", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
