@@ -45,9 +45,10 @@ type ClusterStatus struct {
 
 // InstallRequest is the JSON body for POST /api/install.
 type InstallRequest struct {
-	Context   string `json:"context"`
-	Version   string `json:"version"`
-	Namespace string `json:"namespace"`
+	Context     string `json:"context"`
+	Version     string `json:"version"`
+	Namespace   string `json:"namespace"`
+	ClusterName string `json:"cluster_name"`
 }
 
 // InstallResponse is the JSON body returned by POST /api/install.
@@ -112,8 +113,8 @@ func Serve(port int, kubeCtx string) error {
 			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
 			return
 		}
-		if req.Context == "" || req.Version == "" {
-			json.NewEncoder(w).Encode(InstallResponse{Error: "context and version are required"})
+		if req.Context == "" || req.Version == "" || req.ClusterName == "" {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "context, version, and cluster_name are required"})
 			return
 		}
 
@@ -130,6 +131,7 @@ func Serve(port int, kubeCtx string) error {
 			"--namespace", ns,
 			"--create-namespace",
 			"--kube-context", req.Context,
+			"--set", "settings.clusterName=" + req.ClusterName,
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
