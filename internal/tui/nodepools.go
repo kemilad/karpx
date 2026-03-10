@@ -15,16 +15,18 @@ import (
 // ─────────────────────────────────────────────────────────────────────────────
 
 type NodePoolEntry struct {
-	Name   string
-	Mode   string // karpx.io/generated-mode annotation
-	Ready  bool
-	CPULim string
-	MemLim string
+	Name        string
+	Mode        string // karpx.io/generated-mode annotation
+	Ready       bool
+	NotReadyMsg string // condition message when not ready
+	CPULim      string
+	MemLim      string
 }
 
 type NodeClassEntry struct {
-	Name  string
-	Ready bool
+	Name        string
+	Ready       bool
+	NotReadyMsg string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,6 +143,9 @@ func (m *NodePoolsModel) View() string {
 				         ready,
 			)
 			b.WriteString(StyleRowNormal.Render(row) + "\n")
+			if !np.Ready && np.NotReadyMsg != "" {
+				b.WriteString(StyleMuted.Render("    └ "+np.NotReadyMsg) + "\n")
+			}
 		}
 	}
 
@@ -168,6 +173,9 @@ func (m *NodePoolsModel) View() string {
 			}
 			row := fmt.Sprintf("  %-*s  %s", colName, nc.Name, ready)
 			b.WriteString(StyleRowNormal.Render(row) + "\n")
+			if !nc.Ready && nc.NotReadyMsg != "" {
+				b.WriteString(StyleMuted.Render("    └ "+nc.NotReadyMsg) + "\n")
+			}
 		}
 	}
 
@@ -234,19 +242,28 @@ type k8sMeta struct {
 	} `json:"spec"`
 	Status struct {
 		Conditions []struct {
-			Type   string `json:"type"`
-			Status string `json:"status"`
+			Type    string `json:"type"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Reason  string `json:"reason"`
 		} `json:"conditions"`
 	} `json:"status"`
 }
 
-func isReady(m k8sMeta) bool {
+func readyStatus(m k8sMeta) (bool, string) {
 	for _, c := range m.Status.Conditions {
 		if c.Type == "Ready" {
-			return c.Status == "True"
+			if c.Status == "True" {
+				return true, ""
+			}
+			msg := c.Reason
+			if c.Message != "" {
+				msg = c.Message
+			}
+			return false, msg
 		}
 	}
-	return false
+	return false, ""
 }
 
 func parseNodePools(data []byte) []NodePoolEntry {
@@ -260,12 +277,14 @@ func parseNodePools(data []byte) []NodePoolEntry {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			continue
 		}
+		ready, notReadyMsg := readyStatus(m)
 		e := NodePoolEntry{
-			Name:   m.Metadata.Name,
-			Mode:   m.Metadata.Annotations["karpx.io/generated-mode"],
-			Ready:  isReady(m),
-			CPULim: m.Spec.Limits["cpu"],
-			MemLim: m.Spec.Limits["memory"],
+			Name:        m.Metadata.Name,
+			Mode:        m.Metadata.Annotations["karpx.io/generated-mode"],
+			Ready:       ready,
+			NotReadyMsg: notReadyMsg,
+			CPULim:      m.Spec.Limits["cpu"],
+			MemLim:      m.Spec.Limits["memory"],
 		}
 		out = append(out, e)
 	}
@@ -283,7 +302,8 @@ func parseNodeClasses(data []byte) []NodeClassEntry {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			continue
 		}
-		out = append(out, NodeClassEntry{Name: m.Metadata.Name, Ready: isReady(m)})
+		ready, notReadyMsg := readyStatus(m)
+		out = append(out, NodeClassEntry{Name: m.Metadata.Name, Ready: ready, NotReadyMsg: notReadyMsg})
 	}
 	return out
 }
