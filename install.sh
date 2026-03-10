@@ -131,8 +131,10 @@ download() {
   ok "Download complete"
 
   step "Verifying SHA-256 checksum..."
-  (cd "$TMP" && grep "$TARBALL" checksums.txt | sha256sum --check --status) || \
-    fail "Checksum verification failed — the downloaded file may be corrupt."
+  expected=$(grep "$TARBALL" "$TMP/checksums.txt" | awk '{print $1}')
+  [ -z "$expected" ] && fail "Could not find checksum for $TARBALL in checksums.txt"
+  actual=$(shasum -a 256 "$TMP/$TARBALL" | awk '{print $1}')
+  [ "$expected" = "$actual" ] || fail "Checksum mismatch — expected $expected, got $actual"
   ok "Checksum verified"
 
   tar -xzf "$TMP/$TARBALL" -C "$TMP"
