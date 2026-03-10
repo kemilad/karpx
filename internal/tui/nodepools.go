@@ -85,11 +85,8 @@ func (m *NodePoolsModel) Update(msg tea.Msg) (*NodePoolsModel, tea.Cmd) {
 func (m *NodePoolsModel) View() string {
 	var b strings.Builder
 
-	header := StyleHeader.Width(m.width).Render(
-		"  ⚡ karpx" +
-			strings.Repeat(" ", max(0, m.width-30)) +
-			"NodePools / EC2NodeClasses",
-	)
+	headerText := "  ⚡ karpx" + strings.Repeat(" ", max(0, m.width-36)) + "NodePools / EC2NodeClasses"
+	header := StyleHeader.Width(max(1, m.width)).Render(headerText)
 	b.WriteString(header + "\n\n")
 
 	if m.loading {
@@ -122,7 +119,7 @@ func (m *NodePoolsModel) View() string {
 			         StyleTableHeader.Render("READY"),
 		)
 		b.WriteString(hdr + "\n")
-		b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", min(m.width-4, 80))) + "\n")
+		b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", max(0, min(m.width-4, 80)))) + "\n")
 
 		for _, np := range m.nodePools {
 			ready := StyleSuccess.Render("✓")
