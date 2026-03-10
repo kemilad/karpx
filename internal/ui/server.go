@@ -74,9 +74,11 @@ type InstallResponse struct {
 
 // UninstallRequest is the JSON body for POST /api/uninstall.
 type UninstallRequest struct {
-	Context   string `json:"context"`
-	Namespace string `json:"namespace"`
-	Release   string `json:"release"`
+	Context         string `json:"context"`
+	Namespace       string `json:"namespace"`
+	Release         string `json:"release"`
+	DeleteCRDs      bool   `json:"delete_crds"`
+	DeleteNamespace bool   `json:"delete_namespace"`
 }
 
 // UpgradeRequest is the JSON body for POST /api/upgrade.
@@ -301,15 +303,83 @@ func Serve(port int, kubeCtx string) error {
 		if ns == "" {
 			ns = "karpenter"
 		}
-		args := []string{"uninstall", release, "--namespace", ns, "--kube-context", req.Context}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "helm", args...).CombinedOutput()
+
+		var steps []string
+		addStep := func(s string) { steps = append(steps, s) }
+
+		// ── Step 1: helm uninstall ────────────────────────────────────────
+		addStep("Running helm uninstall…")
+		helmArgs := []string{"uninstall", release, "--namespace", ns, "--kube-context", req.Context}
+		out, err := exec.CommandContext(ctx, "helm", helmArgs...).CombinedOutput()
 		if err != nil {
-			json.NewEncoder(w).Encode(InstallResponse{Error: fmt.Sprintf("%v\n%s", err, strings.TrimSpace(string(out)))})
+			addStep(fmt.Sprintf("✗ helm uninstall failed: %v — %s", err, strings.TrimSpace(string(out))))
+			json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
 			return
 		}
-		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
+		addStep("✓ Helm release removed")
+
+		// ── Step 2: delete custom resources ──────────────────────────────
+		if req.DeleteCRDs {
+			addStep("Deleting NodeClaims…")
+			kubectlDel := func(resource string) {
+				args := []string{"delete", resource, "--all", "--context", req.Context, "--ignore-not-found"}
+				o, e := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
+				if e != nil {
+					addStep(fmt.Sprintf("⚠ kubectl delete %s: %v — %s", resource, e, strings.TrimSpace(string(o))))
+				} else {
+					addStep(fmt.Sprintf("✓ %s deleted", resource))
+				}
+			}
+			kubectlDel("nodeclaims")
+			kubectlDel("nodepools")
+			// provider-specific node classes
+			for _, res := range []string{
+				"ec2nodeclasses.karpenter.k8s.aws",
+				"aksnodeclasses.karpenter.azure.com",
+				"gcpnodeclasses.karpenter.k8s.gcp",
+			} {
+				args := []string{"delete", res, "--all", "--context", req.Context, "--ignore-not-found"}
+				o, e := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
+				if e == nil && strings.TrimSpace(string(o)) != "" {
+					addStep(fmt.Sprintf("✓ %s deleted", res))
+				}
+			}
+
+			// ── Step 3: delete CRDs ───────────────────────────────────────
+			addStep("Deleting Karpenter CRDs…")
+			crdArgs := []string{
+				"delete", "crd", "--ignore-not-found", "--context", req.Context,
+				"nodepools.karpenter.sh",
+				"nodeclaims.karpenter.sh",
+				"ec2nodeclasses.karpenter.k8s.aws",
+				"aksnodeclasses.karpenter.azure.com",
+				"gcpnodeclasses.karpenter.k8s.gcp",
+			}
+			o, e := exec.CommandContext(ctx, "kubectl", crdArgs...).CombinedOutput()
+			if e != nil {
+				addStep(fmt.Sprintf("⚠ CRD deletion: %v — %s", e, strings.TrimSpace(string(o))))
+			} else {
+				addStep("✓ Karpenter CRDs removed")
+			}
+		}
+
+		// ── Step 4: delete namespace ──────────────────────────────────────
+		if req.DeleteNamespace {
+			addStep(fmt.Sprintf("Deleting namespace %q…", ns))
+			nsArgs := []string{"delete", "namespace", ns, "--context", req.Context, "--ignore-not-found"}
+			o, e := exec.CommandContext(ctx, "kubectl", nsArgs...).CombinedOutput()
+			if e != nil {
+				addStep(fmt.Sprintf("⚠ namespace deletion: %v — %s", e, strings.TrimSpace(string(o))))
+			} else {
+				addStep(fmt.Sprintf("✓ Namespace %q deleted", ns))
+			}
+		}
+
+		addStep("✓ Uninstall complete")
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Steps: steps})
 	})
 
 	// ── Zero-downtime upgrade ────────────────────────────────────────────────

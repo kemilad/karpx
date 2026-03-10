@@ -717,6 +717,37 @@
   </div>
 </div>
 
+<!-- ── Uninstall Modal ────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="uninstall-modal">
+  <div class="modal" style="max-width:460px">
+    <button class="modal-close" onclick="closeUninstallModal()">✕</button>
+    <div class="modal-title" style="color:var(--red)">⚠ Uninstall Karpenter</div>
+    <p id="uninstall-modal-desc" style="color:var(--text-dim);font-size:0.85rem;margin:0.5rem 0 1.2rem"></p>
+
+    <div class="modal-section">
+      <div class="modal-section-title">What to remove</div>
+      <label style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.6rem;cursor:pointer;font-size:0.88rem">
+        <input type="checkbox" id="uninstall-crds" checked style="accent-color:var(--red);width:15px;height:15px">
+        Delete CRDs &amp; custom resources (NodePools, NodeClaims, EC2NodeClasses)
+      </label>
+      <label style="display:flex;align-items:center;gap:0.6rem;cursor:pointer;font-size:0.88rem">
+        <input type="checkbox" id="uninstall-ns" checked style="accent-color:var(--red);width:15px;height:15px">
+        Delete Karpenter namespace
+      </label>
+    </div>
+
+    <div id="uninstall-result" style="display:none;margin-top:1rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.8rem 1rem;font-size:0.78rem;font-family:var(--mono);max-height:200px;overflow-y:auto;white-space:pre-wrap;line-height:1.6"></div>
+
+    <div style="display:flex;gap:0.7rem;margin-top:1.4rem;justify-content:flex-end">
+      <button onclick="closeUninstallModal()" class="btn" style="background:var(--surface);border:1px solid var(--border);color:var(--text-dim)">Cancel</button>
+      <button id="uninstall-confirm-btn" onclick="confirmUninstall()"
+        style="background:rgba(239,68,68,0.15);border:1px solid var(--red);color:var(--red);padding:0.45rem 1.1rem;border-radius:5px;font-size:0.82rem;cursor:pointer;font-family:var(--mono)">
+        Uninstall
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Node Provisioning Modal ─────────────────────────────────────── -->
 <div class="modal-backdrop" id="nodes-modal">
   <div class="modal">
@@ -1240,39 +1271,73 @@
     if (success) setTimeout(() => panel.remove(), 30000);
   }
 
-  // ── Uninstall ─────────────────────────────────────────────────────────────
-  async function doUninstall(btn) {
+  // ── Uninstall modal ───────────────────────────────────────────────────────
+  let _uninstallBtn = null;
+
+  function doUninstall(btn) {
+    _uninstallBtn = btn;
+    const ctx = btn.dataset.context;
+    document.getElementById('uninstall-modal-desc').textContent =
+      `Remove Karpenter from "${ctx}". The Helm release will be deleted first, then optionally the CRDs and namespace.`;
+    document.getElementById('uninstall-result').style.display = 'none';
+    document.getElementById('uninstall-result').textContent = '';
+    document.getElementById('uninstall-confirm-btn').disabled = false;
+    document.getElementById('uninstall-confirm-btn').textContent = 'Uninstall';
+    document.getElementById('uninstall-modal').classList.add('open');
+  }
+
+  function closeUninstallModal() {
+    document.getElementById('uninstall-modal').classList.remove('open');
+  }
+
+  async function confirmUninstall() {
+    const btn       = _uninstallBtn;
     const ctx       = btn.dataset.context;
     const namespace = btn.dataset.namespace || 'karpenter';
     const release   = btn.dataset.release   || 'karpenter';
+    const deleteCRDs = document.getElementById('uninstall-crds').checked;
+    const deleteNS   = document.getElementById('uninstall-ns').checked;
 
-    if (!confirm(`Uninstall Karpenter from "${ctx}"?\n\nThis removes the controller. NodePool/EC2NodeClass resources will NOT be deleted automatically.`)) return;
+    const confirmBtn = document.getElementById('uninstall-confirm-btn');
+    confirmBtn.disabled = true;
+    confirmBtn.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;margin-right:0.4rem"></span>Uninstalling…';
 
-    btn.disabled = true;
-    const orig = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;margin-right:0.4rem"></span>Removing…';
+    const resultEl = document.getElementById('uninstall-result');
+    resultEl.style.display = 'block';
+    resultEl.textContent = 'Starting uninstall…\n';
 
     try {
       const resp = await fetch('/api/uninstall', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: ctx, namespace, release }),
+        body: JSON.stringify({ context: ctx, namespace, release, delete_crds: deleteCRDs, delete_namespace: deleteNS }),
       });
       const result = await resp.json();
+      const steps = result.steps || [];
+      resultEl.textContent = steps.join('\n');
+      resultEl.scrollTop = resultEl.scrollHeight;
+
       if (result.success) {
-        showToast(`✓ Karpenter uninstalled from ${ctx}`, 'success', 6000);
+        confirmBtn.textContent = '✓ Done';
+        confirmBtn.style.background = 'rgba(34,197,94,0.15)';
+        confirmBtn.style.borderColor = 'var(--green)';
+        confirmBtn.style.color = 'var(--green)';
         await refresh();
       } else {
-        showToast(`Uninstall failed: ${result.error || 'unknown error'}`, 'error', 8000);
-        btn.disabled = false;
-        btn.innerHTML = orig;
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Retry';
+        showToast(`Uninstall failed — see details`, 'error', 8000);
       }
     } catch (err) {
-      showToast(`Uninstall error: ${err.message}`, 'error', 8000);
-      btn.disabled = false;
-      btn.innerHTML = orig;
+      resultEl.textContent += `\nError: ${err.message}`;
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Retry';
     }
   }
+
+  document.getElementById('uninstall-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('uninstall-modal')) closeUninstallModal();
+  });
 
   // ── Node provisioning modal ───────────────────────────────────────────────
   let _nodesCtx = '';
