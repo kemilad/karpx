@@ -69,10 +69,38 @@ type UninstallRequest struct {
 	Release   string `json:"release"`
 }
 
+// UpgradeRequest is the JSON body for POST /api/upgrade.
+type UpgradeRequest struct {
+	Context     string `json:"context"`
+	Version     string `json:"version"`
+	Namespace   string `json:"namespace"`
+	Release     string `json:"release"`
+	ClusterName string `json:"cluster_name"`
+	Region      string `json:"region"`
+}
+
+// NodePoolDetail is a single NodePool with full status, returned by /api/nodepools.
+type NodePoolDetail struct {
+	Name        string `json:"name"`
+	Mode        string `json:"mode,omitempty"`
+	Ready       bool   `json:"ready"`
+	NotReadyMsg string `json:"not_ready_msg,omitempty"`
+	CPULim      string `json:"cpu_lim,omitempty"`
+	MemLim      string `json:"mem_lim,omitempty"`
+}
+
+// NodeClassDetail is a single EC2NodeClass with status, returned by /api/nodepools.
+type NodeClassDetail struct {
+	Name        string `json:"name"`
+	Ready       bool   `json:"ready"`
+	NotReadyMsg string `json:"not_ready_msg,omitempty"`
+}
+
 // NodePoolListResponse is returned by GET /api/nodepools.
 type NodePoolListResponse struct {
-	NodePools []string `json:"node_pools"`
-	Error     string   `json:"error,omitempty"`
+	NodePools   []NodePoolDetail  `json:"node_pools"`
+	NodeClasses []NodeClassDetail `json:"node_classes"`
+	Error       string            `json:"error,omitempty"`
 }
 
 // RecommendRequest is the JSON body for POST /api/nodes/recommend.
@@ -230,34 +258,162 @@ func Serve(port int, kubeCtx string) error {
 		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
 	})
 
+	// ── Upgrade ─────────────────────────────────────────────────────────────
+	mux.HandleFunc("/api/upgrade", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req UpgradeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			return
+		}
+		if req.Context == "" || req.Version == "" {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "context and version are required"})
+			return
+		}
+		ns := req.Namespace
+		if ns == "" {
+			ns = "karpenter"
+		}
+		release := req.Release
+		if release == "" {
+			release = "karpenter"
+		}
+		ver := strings.TrimPrefix(req.Version, "v")
+		args := []string{
+			"upgrade", release,
+			"oci://public.ecr.aws/karpenter/karpenter",
+			"--version", ver,
+			"--namespace", ns,
+			"--kube-context", req.Context,
+			"--reuse-values",
+		}
+		if req.ClusterName != "" {
+			args = append(args, "--set", "settings.clusterName="+req.ClusterName)
+		}
+		if req.Region != "" {
+			args = append(args,
+				"--set", "controller.env[0].name=AWS_REGION",
+				"--set", "controller.env[0].value="+req.Region,
+			)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "helm", args...).CombinedOutput()
+		if err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{
+				Error: fmt.Sprintf("%v\n%s", err, strings.TrimSpace(string(out))),
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
+	})
+
 	// ── NodePools list ──────────────────────────────────────────────────────
 	mux.HandleFunc("/api/nodepools", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 
 		kubeCtxParam := r.URL.Query().Get("context")
-		args := []string{"get", "nodepools", "-o", "name"}
-		if kubeCtxParam != "" {
-			args = append(args, "--context", kubeCtxParam)
+
+		// Inline types for k8s JSON parsing (mirrors tui/nodepools.go).
+		type k8sCond struct {
+			Type    string `json:"type"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Reason  string `json:"reason"`
 		}
-		out, err := exec.CommandContext(r.Context(), "kubectl", args...).CombinedOutput()
-		outStr := strings.TrimSpace(string(out))
-		if err != nil || strings.Contains(outStr, "No resources found") || strings.Contains(outStr, "no matches for kind") {
-			json.NewEncoder(w).Encode(NodePoolListResponse{NodePools: []string{}})
-			return
+		type k8sMeta struct {
+			Metadata struct {
+				Name        string            `json:"name"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+			Spec struct {
+				Limits map[string]string `json:"limits"`
+			} `json:"spec"`
+			Status struct {
+				Conditions []k8sCond `json:"conditions"`
+			} `json:"status"`
 		}
-		var names []string
-		for _, line := range strings.Split(outStr, "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				// strip "nodepool.karpenter.sh/" prefix if present
-				if i := strings.LastIndex(line, "/"); i >= 0 {
-					line = line[i+1:]
+		type k8sList struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		readyStatus := func(m k8sMeta) (bool, string) {
+			for _, c := range m.Status.Conditions {
+				if c.Type == "Ready" {
+					if c.Status == "True" {
+						return true, ""
+					}
+					msg := c.Reason
+					if c.Message != "" {
+						msg = c.Message
+					}
+					return false, msg
 				}
-				names = append(names, line)
+			}
+			return false, ""
+		}
+
+		resp := NodePoolListResponse{
+			NodePools:   []NodePoolDetail{},
+			NodeClasses: []NodeClassDetail{},
+		}
+
+		// NodePools
+		npArgs := []string{"get", "nodepools", "-o", "json"}
+		if kubeCtxParam != "" {
+			npArgs = append(npArgs, "--context", kubeCtxParam)
+		}
+		if npOut, err := exec.CommandContext(r.Context(), "kubectl", npArgs...).Output(); err == nil {
+			var list k8sList
+			if json.Unmarshal(npOut, &list) == nil {
+				for _, raw := range list.Items {
+					var m k8sMeta
+					if json.Unmarshal(raw, &m) != nil {
+						continue
+					}
+					ready, msg := readyStatus(m)
+					resp.NodePools = append(resp.NodePools, NodePoolDetail{
+						Name:        m.Metadata.Name,
+						Mode:        m.Metadata.Annotations["karpx.io/generated-mode"],
+						Ready:       ready,
+						NotReadyMsg: msg,
+						CPULim:      m.Spec.Limits["cpu"],
+						MemLim:      m.Spec.Limits["memory"],
+					})
+				}
 			}
 		}
-		json.NewEncoder(w).Encode(NodePoolListResponse{NodePools: names})
+
+		// EC2NodeClasses
+		ncArgs := []string{"get", "ec2nodeclasses", "-o", "json"}
+		if kubeCtxParam != "" {
+			ncArgs = append(ncArgs, "--context", kubeCtxParam)
+		}
+		if ncOut, err := exec.CommandContext(r.Context(), "kubectl", ncArgs...).Output(); err == nil {
+			var list k8sList
+			if json.Unmarshal(ncOut, &list) == nil {
+				for _, raw := range list.Items {
+					var m k8sMeta
+					if json.Unmarshal(raw, &m) != nil {
+						continue
+					}
+					ready, msg := readyStatus(m)
+					resp.NodeClasses = append(resp.NodeClasses, NodeClassDetail{
+						Name:        m.Metadata.Name,
+						Ready:       ready,
+						NotReadyMsg: msg,
+					})
+				}
+			}
+		}
+
+		json.NewEncoder(w).Encode(resp)
 	})
 
 	// ── Node recommendation ─────────────────────────────────────────────────

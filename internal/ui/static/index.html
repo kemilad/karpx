@@ -88,7 +88,7 @@
     }
     .btn-ghost:hover { border-color: var(--violet-lt); color: var(--violet-lt); }
 
-    .btn-install, .btn-uninstall, .btn-nodes {
+    .btn-install, .btn-uninstall, .btn-nodes, .btn-upgrade {
       border-radius: 6px;
       padding: 0.28rem 0.65rem;
       font-size: 0.75rem;
@@ -117,7 +117,14 @@
     }
     .btn-nodes:hover:not(:disabled) { background: rgba(6,182,212,0.22); }
 
-    .btn-install:disabled, .btn-uninstall:disabled, .btn-nodes:disabled {
+    .btn-upgrade {
+      background: rgba(245,158,11,0.1);
+      color: var(--amber);
+      border: 1px solid rgba(245,158,11,0.4);
+    }
+    .btn-upgrade:hover:not(:disabled) { background: rgba(245,158,11,0.22); }
+
+    .btn-install:disabled, .btn-uninstall:disabled, .btn-nodes:disabled, .btn-upgrade:disabled {
       opacity: 0.5;
       cursor: not-allowed;
     }
@@ -216,6 +223,38 @@
       font-size: 0.72rem;
       padding: 0.18rem 0.5rem;
       border-radius: 99px;
+    }
+
+    .np-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+      margin-bottom: 0.2rem;
+    }
+    .np-table th {
+      text-align: left;
+      padding: 0.3rem 0.5rem;
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    .np-table td {
+      padding: 0.4rem 0.5rem;
+      border-bottom: 1px solid rgba(42,42,66,0.6);
+      font-family: var(--mono);
+      vertical-align: top;
+    }
+    .np-table tr:last-child td { border-bottom: none; }
+    .np-ready-ok  { color: var(--green); }
+    .np-ready-err { color: var(--red); }
+    .np-not-ready-msg {
+      font-size: 0.7rem;
+      color: var(--muted);
+      display: block;
+      padding-top: 0.15rem;
     }
 
     .manifest-area {
@@ -567,10 +606,12 @@
     <div class="modal-title" id="modal-title">⚙ Node Provisioning</div>
 
     <div class="modal-section">
-      <div class="modal-section-title">Existing NodePools</div>
-      <div class="nodepools-list" id="nodepools-list">
-        <span style="color:var(--muted);font-size:0.78rem">Loading…</span>
-      </div>
+      <div class="modal-section-title">NodePools</div>
+      <div id="nodepools-list"><span style="color:var(--muted);font-size:0.78rem">Loading…</span></div>
+    </div>
+    <div class="modal-section">
+      <div class="modal-section-title">EC2NodeClasses</div>
+      <div id="nodeclasses-list"><span style="color:var(--muted);font-size:0.78rem">Loading…</span></div>
     </div>
 
     <div class="modal-section">
@@ -680,6 +721,14 @@
 
   function actionCell(cluster) {
     if (cluster.karpenter_installed) {
+      const upgradeBtn = cluster.upgrade_available
+        ? `<button class="btn-upgrade"
+              data-action="upgrade"
+              data-context="${esc(cluster.context)}"
+              data-version="${esc(cluster.latest_compatible)}"
+              data-namespace="${esc(cluster.karpenter_namespace || 'karpenter')}"
+              data-release="${esc(cluster.karpenter_release || 'karpenter')}">▲ v${esc(cluster.latest_compatible)}</button>`
+        : '';
       const nodesBtn = `<button class="btn-nodes"
           data-action="nodes"
           data-context="${esc(cluster.context)}"
@@ -690,7 +739,7 @@
           data-context="${esc(cluster.context)}"
           data-namespace="${esc(cluster.karpenter_namespace || 'karpenter')}"
           data-release="${esc(cluster.karpenter_release || 'karpenter')}">Uninstall</button>`;
-      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">${nodesBtn}${uninstallBtn}</span>`;
+      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">${upgradeBtn}${nodesBtn}${uninstallBtn}</span>`;
     }
     if (cluster.provider === 'aws') {
       if (cluster.latest_compatible) {
@@ -787,6 +836,9 @@
         case 'install':
           await doInstall(btn);
           break;
+        case 'upgrade':
+          await doUpgrade(btn);
+          break;
         case 'uninstall':
           await doUninstall(btn);
           break;
@@ -848,6 +900,45 @@
       showToast(`Install error: ${err.message}`, 'error', 8000);
       btn.disabled = false;
       btn.innerHTML = origHTML;
+    }
+  }
+
+  // ── Upgrade ───────────────────────────────────────────────────────────────
+  async function doUpgrade(btn) {
+    const ctx     = btn.dataset.context;
+    const version = btn.dataset.version;
+    const ns      = btn.dataset.namespace || 'karpenter';
+    const release = btn.dataset.release   || 'karpenter';
+
+    const parsed = parseEksContext(ctx);
+    const region = window.prompt(`AWS region (needed to preserve controller env):`, parsed.region);
+    if (region === null) return; // cancelled
+
+    if (!confirm(`Upgrade Karpenter to v${version} on "${ctx}"?`)) return;
+
+    btn.disabled = true;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;margin-right:0.4rem"></span>Upgrading…';
+
+    try {
+      const resp = await fetch('/api/upgrade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: ctx, version, namespace: ns, release, region: region.trim() }),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        showToast(`✓ Karpenter upgraded to v${version}`, 'success', 6000);
+        await refresh();
+      } else {
+        showToast(`Upgrade failed: ${result.error || 'unknown error'}`, 'error', 8000);
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
+    } catch (err) {
+      showToast(`Upgrade error: ${err.message}`, 'error', 8000);
+      btn.disabled = false;
+      btn.innerHTML = orig;
     }
   }
 
@@ -913,19 +1004,57 @@
 
     document.getElementById('nodes-modal').classList.add('open');
 
-    // Fetch existing NodePools
-    const list = document.getElementById('nodepools-list');
-    list.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">Loading…</span>';
+    // Fetch existing NodePools + EC2NodeClasses
+    const npList = document.getElementById('nodepools-list');
+    const ncList = document.getElementById('nodeclasses-list');
+    npList.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">Loading…</span>';
+    ncList.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">Loading…</span>';
     fetch(`/api/nodepools?context=${encodeURIComponent(ctx)}`)
       .then(r => r.json())
       .then(data => {
+        // NodePools table
         if (!data.node_pools || data.node_pools.length === 0) {
-          list.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">None — no NodePools found</span>';
+          npList.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">None found</span>';
         } else {
-          list.innerHTML = data.node_pools.map(n => `<span class="nodepool-chip">${esc(n)}</span>`).join('');
+          npList.innerHTML = `<table class="np-table">
+            <thead><tr><th>Name</th><th>Mode</th><th>Limits (cpu / mem)</th><th>Ready</th></tr></thead>
+            <tbody>${data.node_pools.map(np => {
+              const lim = (np.cpu_lim || np.mem_lim) ? `${np.cpu_lim || '—'} / ${np.mem_lim || '—'}` : '—';
+              const mode = np.mode || '—';
+              const readyCls = np.ready ? 'np-ready-ok' : 'np-ready-err';
+              const readyIcon = np.ready ? '✓' : '✗';
+              const msg = (!np.ready && np.not_ready_msg) ? `<span class="np-not-ready-msg">└ ${esc(np.not_ready_msg)}</span>` : '';
+              return `<tr>
+                <td>${esc(np.name)}</td>
+                <td>${esc(mode)}</td>
+                <td>${esc(lim)}</td>
+                <td><span class="${readyCls}">${readyIcon}</span>${msg}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>`;
+        }
+        // EC2NodeClasses table
+        if (!data.node_classes || data.node_classes.length === 0) {
+          ncList.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">None found</span>';
+        } else {
+          ncList.innerHTML = `<table class="np-table">
+            <thead><tr><th>Name</th><th>Ready</th></tr></thead>
+            <tbody>${data.node_classes.map(nc => {
+              const readyCls = nc.ready ? 'np-ready-ok' : 'np-ready-err';
+              const readyIcon = nc.ready ? '✓' : '✗';
+              const msg = (!nc.ready && nc.not_ready_msg) ? `<span class="np-not-ready-msg">└ ${esc(nc.not_ready_msg)}</span>` : '';
+              return `<tr>
+                <td>${esc(nc.name)}</td>
+                <td><span class="${readyCls}">${readyIcon}</span>${msg}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>`;
         }
       })
-      .catch(() => { list.innerHTML = '<span style="color:var(--red);font-size:0.78rem">Could not fetch NodePools</span>'; });
+      .catch(() => {
+        npList.innerHTML = '<span style="color:var(--red);font-size:0.78rem">Could not fetch NodePools</span>';
+        ncList.innerHTML = '';
+      });
   }
 
   function closeNodesModal() {
@@ -989,13 +1118,8 @@
       if (result.success) {
         showToast('✓ NodePool manifest applied', 'success', 6000);
         // Refresh nodepools list inside modal
-        fetch(`/api/nodepools?context=${encodeURIComponent(_nodesCtx)}`)
-          .then(r => r.json())
-          .then(data => {
-            const list = document.getElementById('nodepools-list');
-            list.innerHTML = (data.node_pools || []).map(n => `<span class="nodepool-chip">${esc(n)}</span>`).join('') ||
-              '<span style="color:var(--muted);font-size:0.78rem">None</span>';
-          });
+        openNodesModal(_nodesCtx, _nodesProvider,
+          document.getElementById('field-cluster-name')?.value || '');
       } else {
         showToast(`Apply failed: ${result.error || 'unknown error'}`, 'error', 8000);
       }
