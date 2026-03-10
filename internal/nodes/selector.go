@@ -98,25 +98,25 @@ func buildAWS(r *Recommendation, p *kube.WorkloadProfile, wtype kube.WorkloadTyp
 				"Graviton r7g/r6g selected first for best $/GiB ratio on Spot",
 			)
 		case kube.WorkloadCPU:
-			r.InstanceFamilies = []string{"c7g", "c6g", "c7i", "c6i", "c6a"}
+			r.InstanceFamilies = []string{"c7g", "c6g", "c7i", "c6i", "c6a", "c7i-flex", "m7i-flex"}
 			r.Architectures = []string{"arm64", "amd64"}
 			r.Reasoning = addReasons(r.Reasoning,
 				"Compute-intensive workloads (<2 GiB/core) — compute-optimised families (c-series)",
-				"Graviton c7g/c6g offer best compute $/vCPU on Spot",
+				"Graviton c7g/c6g offer best compute $/vCPU on Spot; c7i-flex/m7i-flex as flexible fallback",
 			)
 		case kube.WorkloadBatch:
-			r.InstanceFamilies = []string{"m7g", "m6g", "c7g", "c6g", "m7i", "m6i"}
+			r.InstanceFamilies = []string{"m7g", "m6g", "c7g", "c6g", "m7i", "m6i", "m7i-flex", "c7i-flex"}
 			r.Architectures = []string{"arm64", "amd64"}
 			r.Reasoning = addReasons(r.Reasoning,
 				"Batch/job workloads — mixed general+compute families with Spot for lowest cost",
 				"Karpenter's consolidation will terminate idle nodes between job runs",
 			)
 		default: // general / unknown
-			r.InstanceFamilies = []string{"m7g", "m6g", "m7i", "m6i", "m6a"}
+			r.InstanceFamilies = []string{"m7g", "m6g", "m7i", "m6i", "m6a", "m7i-flex", "c7i-flex"}
 			r.Architectures = []string{"arm64", "amd64"}
 			r.Reasoning = addReasons(r.Reasoning,
 				"General-purpose workloads — latest Graviton + Intel m-series",
-				"arm64 (Graviton) included for ~20% better price/performance on Spot",
+				"arm64 (Graviton) included for ~20% better price/performance on Spot; flex variants as fallback",
 			)
 		}
 
@@ -146,9 +146,9 @@ func buildAWS(r *Recommendation, p *kube.WorkloadProfile, wtype kube.WorkloadTyp
 				"c5n/hpc7g for network/HPC workloads if applicable",
 			)
 		default:
-			r.InstanceFamilies = []string{"m7i", "c7i", "m6i", "c6i"}
+			r.InstanceFamilies = []string{"m7i", "c7i", "m6i", "c6i", "m7i-flex", "c7i-flex"}
 			r.Reasoning = addReasons(r.Reasoning,
-				"High-performance general: latest-gen Intel m7i/c7i on-demand",
+				"High-performance general: latest-gen Intel m7i/c7i on-demand; flex variants as fallback",
 				"No Spot to eliminate interruptions for latency-sensitive services",
 			)
 		}
@@ -163,19 +163,19 @@ func buildAWS(r *Recommendation, p *kube.WorkloadProfile, wtype kube.WorkloadTyp
 				"GPU workloads — balanced mix of GPU families, spot+on-demand",
 			)
 		case kube.WorkloadMemory:
-			r.InstanceFamilies = []string{"r7g", "r7i", "r6g", "r6i", "m7g", "m7i"}
+			r.InstanceFamilies = []string{"r7g", "r7i", "r6g", "r6i", "m7g", "m7i", "m7i-flex"}
 			r.Reasoning = addReasons(r.Reasoning,
-				"Memory workloads — balanced mix of memory-optimised families",
+				"Memory workloads — balanced mix of memory-optimised families; m7i-flex as flexible fallback",
 			)
 		case kube.WorkloadCPU:
-			r.InstanceFamilies = []string{"c7g", "c7i", "m7g", "m7i", "c6g", "c6i"}
+			r.InstanceFamilies = []string{"c7g", "c7i", "m7g", "m7i", "c6g", "c6i", "c7i-flex", "m7i-flex"}
 			r.Reasoning = addReasons(r.Reasoning,
-				"Compute workloads — balanced compute + general families",
+				"Compute workloads — balanced compute + general families; flex variants as fallback",
 			)
 		default:
-			r.InstanceFamilies = []string{"m7g", "m7i", "c7g", "c7i", "m6g", "m6i"}
+			r.InstanceFamilies = []string{"m7g", "m7i", "c7g", "c7i", "m6g", "m6i", "m7i-flex", "c7i-flex"}
 			r.Reasoning = addReasons(r.Reasoning,
-				"Balanced: mixed Graviton + Intel latest-gen, Spot + on-demand",
+				"Balanced: mixed Graviton + Intel latest-gen, Spot + on-demand; flex variants as fallback",
 			)
 		}
 	}
