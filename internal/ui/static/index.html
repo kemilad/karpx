@@ -928,6 +928,20 @@
     return parseEksContext(ctx).clusterName;
   }
 
+  // Map raw mode annotation value to a human-readable badge
+  function modeLabel(mode) {
+    const map = {
+      cost:        '💰 Cost-Optimized',
+      performance: '⚡ High-Performance',
+      balanced:    '⚖ Balanced',
+    };
+    if (!mode) return '<span style="color:var(--muted)">—</span>';
+    const label = map[mode] || mode;
+    const colorMap = { cost: 'var(--green)', performance: 'var(--cyan)', balanced: 'var(--violet-lt)' };
+    const color = colorMap[mode] || 'var(--text-dim)';
+    return `<span style="color:${color};white-space:nowrap">${esc(label)}</span>`;
+  }
+
   // ── Install Modal ─────────────────────────────────────────────────────────
   let _installK8sVer = '';
   let _installCompatible = [];
@@ -1217,13 +1231,12 @@
             <thead><tr><th>Name</th><th>Mode</th><th>Limits (cpu / mem)</th><th>Ready</th></tr></thead>
             <tbody>${data.node_pools.map(np => {
               const lim = (np.cpu_lim || np.mem_lim) ? `${np.cpu_lim || '—'} / ${np.mem_lim || '—'}` : '—';
-              const mode = np.mode || '—';
               const readyCls = np.ready ? 'np-ready-ok' : 'np-ready-err';
               const readyIcon = np.ready ? '✓' : '✗';
               const msg = (!np.ready && np.not_ready_msg) ? `<span class="np-not-ready-msg">└ ${esc(np.not_ready_msg)}</span>` : '';
               return `<tr>
                 <td>${esc(np.name)}</td>
-                <td>${esc(mode)}</td>
+                <td>${modeLabel(np.mode)}</td>
                 <td>${esc(lim)}</td>
                 <td><span class="${readyCls}">${readyIcon}</span>${msg}</td>
               </tr>`;
@@ -1235,17 +1248,33 @@
           ncList.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">None found</span>';
         } else {
           ncList.innerHTML = `<table class="np-table">
-            <thead><tr><th>Name</th><th>Ready</th></tr></thead>
+            <thead><tr><th>Name</th><th>Role</th><th>Ready</th></tr></thead>
             <tbody>${data.node_classes.map(nc => {
               const readyCls = nc.ready ? 'np-ready-ok' : 'np-ready-err';
               const readyIcon = nc.ready ? '✓' : '✗';
               const msg = (!nc.ready && nc.not_ready_msg) ? `<span class="np-not-ready-msg">└ ${esc(nc.not_ready_msg)}</span>` : '';
               return `<tr>
                 <td>${esc(nc.name)}</td>
+                <td style="font-size:0.72rem;color:var(--text-dim)">${esc(nc.role || '—')}</td>
                 <td><span class="${readyCls}">${readyIcon}</span>${msg}</td>
               </tr>`;
             }).join('')}</tbody>
           </table>`;
+
+          // Pre-fill node role from existing EC2NodeClass (first one with a role)
+          const withRole = data.node_classes.find(nc => nc.role);
+          if (withRole) {
+            const roleField = document.getElementById('field-role-arn');
+            if (roleField && !roleField.value) {
+              roleField.value = withRole.role;
+            }
+          }
+        }
+
+        // Also restore last-used role from localStorage if field still empty
+        const roleField = document.getElementById('field-role-arn');
+        if (roleField && !roleField.value) {
+          roleField.value = localStorage.getItem('karpx-node-role') || '';
         }
       })
       .catch(() => {
@@ -1267,6 +1296,9 @@
     const mode        = document.querySelector('.btn-mode.active')?.dataset.mode || 'balanced';
     const clusterName = document.getElementById('field-cluster-name')?.value.trim() || '';
     const roleARN     = document.getElementById('field-role-arn')?.value.trim()     || '';
+
+    // Persist role for next time
+    if (roleARN) localStorage.setItem('karpx-node-role', roleARN);
 
     const genBtn = document.getElementById('btn-generate');
     genBtn.disabled = true;
