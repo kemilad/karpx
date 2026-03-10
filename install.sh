@@ -14,9 +14,9 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 # -----------------------------------------------------------------------
 if [ -t 1 ] && command -v tput &>/dev/null && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
   BOLD="$(tput bold)"; RESET="$(tput sgr0)"
-  VIOLET="\033[38;5;135m"; CYAN="\033[38;5;87m"; GREEN="\033[38;5;84m"
-  YELLOW="\033[38;5;220m"; RED="\033[38;5;196m"; WHITE="\033[38;5;255m"
-  GRAY="\033[38;5;240m"
+  VIOLET=$'\033[38;5;135m'; CYAN=$'\033[38;5;87m'; GREEN=$'\033[38;5;84m'
+  YELLOW=$'\033[38;5;220m'; RED=$'\033[38;5;196m'; WHITE=$'\033[38;5;255m'
+  GRAY=$'\033[38;5;240m'
 else
   BOLD=""; RESET=""; VIOLET=""; CYAN=""; GREEN=""; YELLOW=""; RED=""; WHITE=""; GRAY=""
 fi
@@ -126,16 +126,13 @@ download() {
 
   step "Downloading karpx ${VERSION} for ${OS}/${ARCH}..."
   dim "${URL}"
-  (curl -fsSL "$URL" -o "$TMP/$TARBALL" \
-    && curl -fsSL "$CHECKSUM_URL" -o "$TMP/checksums.txt") &
-  spinner $! "Downloading binary + checksums"
-  wait
+  curl -fsSL "$URL" -o "$TMP/$TARBALL" || fail "Download failed (404?). Release may still be building — try again in a minute."
+  curl -fsSL "$CHECKSUM_URL" -o "$TMP/checksums.txt" || fail "Could not download checksums."
   ok "Download complete"
 
   step "Verifying SHA-256 checksum..."
-  (cd "$TMP" && grep "$TARBALL" checksums.txt | sha256sum --check --status) &
-  spinner $! "Verifying integrity"
-  wait
+  (cd "$TMP" && grep "$TARBALL" checksums.txt | sha256sum --check --status) || \
+    fail "Checksum verification failed — the downloaded file may be corrupt."
   ok "Checksum verified"
 
   tar -xzf "$TMP/$TARBALL" -C "$TMP"
