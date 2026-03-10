@@ -27,6 +27,7 @@ type Model struct {
 	cfg       Config
 	current   view
 	dashboard *DashboardModel
+	nodepools *NodePoolsModel
 }
 
 // NewModel constructs the root model and wires up the initial dashboard view.
@@ -65,7 +66,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case NavUpgrade:
 			return m, m.execUpgrade(msg.KubeContext, msg.Region)
 		case NavNodePools:
+			m.nodepools = NewNodePoolsModel(msg.KubeContext)
 			m.current = viewNodePools
+			return m, m.nodepools.Init()
 		}
 		return m, nil
 
@@ -81,6 +84,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd := m.dashboard.Update(msg)
 		m.dashboard = updated
 		return m, cmd
+	case viewNodePools:
+		if m.nodepools != nil {
+			updated, cmd := m.nodepools.Update(msg)
+			m.nodepools = updated
+			return m, cmd
+		}
 	}
 
 	return m, nil
@@ -89,10 +98,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) View() string {
 	switch m.current {
 	case viewNodePools:
-		return StyleActivePanel.Render(
-			"\n  NodePools / EC2NodeClasses — coming soon\n\n" +
-				"  Press Esc to return to the dashboard.\n",
-		)
+		if m.nodepools != nil {
+			return m.nodepools.View()
+		}
+		return m.dashboard.View()
 	default:
 		return m.dashboard.View()
 	}
