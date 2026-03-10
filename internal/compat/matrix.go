@@ -84,6 +84,13 @@ func FetchAvailableVersions() ([]string, error) {
 
 	var releases []ghRelease
 	if err := json.Unmarshal(body, &releases); err != nil {
+		// GitHub returns an error object (e.g. rate-limit) instead of an array.
+		var ghErr struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &ghErr) == nil && ghErr.Message != "" {
+			return nil, fmt.Errorf("GitHub API: %s", ghErr.Message)
+		}
 		return nil, fmt.Errorf("parse releases response: %w", err)
 	}
 

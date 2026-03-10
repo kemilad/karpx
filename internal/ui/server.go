@@ -189,7 +189,14 @@ func Serve(port int, kubeCtx string) error {
 		}
 		latest, all, err := compat.LatestCompatible(k8sVer)
 		if err != nil {
-			json.NewEncoder(w).Encode(VersionsResponse{Error: err.Error()})
+			// GitHub may be rate-limited — return the min compatible as a
+			// fallback so the UI can still suggest something.
+			minVer := compat.MinCompatibleKarpenter(k8sVer)
+			json.NewEncoder(w).Encode(VersionsResponse{
+				Recommended: minVer,
+				Compatible:  nil,
+				Error:       err.Error(),
+			})
 			return
 		}
 		json.NewEncoder(w).Encode(VersionsResponse{Recommended: latest, Compatible: all})
