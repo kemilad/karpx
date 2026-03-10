@@ -430,7 +430,33 @@ func runInstallAWS(kubeCtx, namespace, clusterName, region, roleARN, karpVer, in
 	}
 
 	fmt.Printf("\n  Installing Karpenter %s on AWS EKS into namespace %q…\n", karpVer, namespace)
-	fmt.Printf("  (helm install wiring coming in next release)\n\n")
+
+	ver := strings.TrimPrefix(karpVer, "v")
+	helmArgs := []string{
+		"install", "karpenter",
+		"oci://public.ecr.aws/karpenter/karpenter",
+		"--version", ver,
+		"--namespace", namespace,
+		"--create-namespace",
+		"--set", "settings.clusterName=" + clusterName,
+		"--set", "controller.env[0].name=AWS_REGION",
+		"--set", "controller.env[0].value=" + region,
+		"--set", "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=" + roleARN,
+	}
+	if kubeCtx != "" {
+		helmArgs = append(helmArgs, "--kube-context", kubeCtx)
+	}
+	if intQueue != "" {
+		helmArgs = append(helmArgs, "--set", "settings.interruptionQueue="+intQueue)
+	}
+
+	helmCmd := exec.Command("helm", helmArgs...)
+	helmCmd.Stdout = os.Stdout
+	helmCmd.Stderr = os.Stderr
+	if err := helmCmd.Run(); err != nil {
+		return fmt.Errorf("helm install failed: %w", err)
+	}
+	fmt.Printf("\n  ✓  Karpenter %s installed successfully.\n\n", karpVer)
 	return nil
 }
 
@@ -598,7 +624,28 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 	}
 
 	fmt.Printf("\n  Upgrading Karpenter to %s…\n", targetVer)
-	fmt.Printf("  (helm upgrade wiring coming in next release)\n\n")
+
+	ver := strings.TrimPrefix(targetVer, "v")
+	helmArgs := []string{
+		"upgrade", "karpenter",
+		"oci://public.ecr.aws/karpenter/karpenter",
+		"--version", ver,
+		"--namespace", info.Namespace,
+	}
+	if reuseVals {
+		helmArgs = append(helmArgs, "--reuse-values")
+	}
+	if kubeCtx != "" {
+		helmArgs = append(helmArgs, "--kube-context", kubeCtx)
+	}
+
+	helmCmd := exec.Command("helm", helmArgs...)
+	helmCmd.Stdout = os.Stdout
+	helmCmd.Stderr = os.Stderr
+	if err := helmCmd.Run(); err != nil {
+		return fmt.Errorf("helm upgrade failed: %w", err)
+	}
+	fmt.Printf("\n  ✓  Karpenter upgraded to %s successfully.\n\n", targetVer)
 	return nil
 }
 
