@@ -301,6 +301,8 @@ func modeLabel(m OptimizationMode) string {
 		return "Cost-Optimized (Spot + Graviton where available)"
 	case ModeHighPerformance:
 		return "High-Performance (On-Demand, latest-gen, no Spot)"
+	case ModeFreeTier:
+		return "Free-Tier (free-tier eligible instance families only)"
 	default:
 		return "Balanced (Spot + On-Demand, mixed families)"
 	}

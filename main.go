@@ -805,6 +805,7 @@ Optimisation modes:
   cost        — Spot instances, Graviton (arm64) where available, lowest $/hour
   balanced    — Mixed Spot + On-Demand, multiple families
   performance — On-Demand only, latest-gen instances, maximum throughput
+  freetier    — Free-tier eligible instances only (m7i-flex, c7i-flex, t3, t4g)
 `,
 		Example: `  karpx nodes -c my-cluster
   karpx nodes -c my-cluster --mode cost
@@ -815,7 +816,7 @@ Optimisation modes:
 	}
 	cmd.Flags().StringVarP(&kubeCtx,     "context",  "c", "", "kubeconfig context")
 	cmd.Flags().StringVar(&providerFlag, "provider",     "", "cloud provider: aws | azure | gcp (default: auto-detect)")
-	cmd.Flags().StringVar(&modeFlag,     "mode",         "", "optimisation mode: cost | balanced | performance (default: ask)")
+	cmd.Flags().StringVar(&modeFlag,     "mode",         "", "optimisation mode: cost | balanced | performance | freetier (default: ask)")
 	return cmd
 }
 
@@ -846,6 +847,8 @@ func runNodes(kubeCtx, providerFlag, modeFlag string) error {
 			mode = nodes.ModeCostOptimized
 		case "performance", "perf":
 			mode = nodes.ModeHighPerformance
+		case "freetier", "free-tier", "free":
+			mode = nodes.ModeFreeTier
 		default:
 			mode = nodes.ModeBalanced
 		}
@@ -969,8 +972,11 @@ func askOptimizationMode() nodes.OptimizationMode {
     [3]  High-Performance — On-Demand only, latest-gen instances, no Spot interruptions
                             Best for latency-sensitive or stateful services
 
+    [4]  Free-Tier        — Free-tier eligible instances only (m7i-flex, c7i-flex, t3, t4g)
+                            For AWS accounts with free-tier or instance-type restrictions
+
 `)
-	fmt.Print("  Choice [1-3]: ")
+	fmt.Print("  Choice [1-4]: ")
 	scanner := bufio.NewScanner(os.Stdin)
 	if scanner.Scan() {
 		switch strings.TrimSpace(scanner.Text()) {
@@ -980,6 +986,8 @@ func askOptimizationMode() nodes.OptimizationMode {
 			return nodes.ModeBalanced
 		case "3":
 			return nodes.ModeHighPerformance
+		case "4":
+			return nodes.ModeFreeTier
 		}
 	}
 	fmt.Printf("  Invalid choice — skipping node optimisation.\n\n")
@@ -1044,6 +1052,8 @@ func modeLabelShort(m nodes.OptimizationMode) string {
 		return "Cost-Optimized (Spot + Graviton)"
 	case nodes.ModeHighPerformance:
 		return "High-Performance (On-Demand, latest-gen)"
+	case nodes.ModeFreeTier:
+		return "Free-Tier (free-tier eligible instances)"
 	default:
 		return "Balanced (Spot + On-Demand, mixed families)"
 	}
