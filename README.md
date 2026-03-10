@@ -119,14 +119,23 @@ for clusters where Karpenter is not yet installed:
     [1]  Cost-Optimized   — Spot + Graviton (arm64), saves 60-80% vs on-demand
     [2]  Balanced         — Mixed Spot + On-Demand, multiple instance families
     [3]  High-Performance — On-Demand only, latest-gen, no interruptions
+    [4]  Free-Tier        — Free-tier eligible instances only (m7i-flex, c7i-flex, t3, t4g)
 ```
 
 It then generates and optionally applies a Karpenter **NodePool + NodeClass** manifest
 tuned to your actual workload profile (CPU/memory ratio, GPU usage, batch jobs).
 
+| Mode | Capacity | Instance families | Best for |
+|------|----------|-------------------|----------|
+| `cost` | Spot + On-Demand | c7g, c6g, c7i, m7i, … | Fault-tolerant workloads, lowest spend |
+| `balanced` | Spot + On-Demand | m7g, m7i, c7g, c7i, … | Most production workloads |
+| `performance` | On-Demand only | m7i, c7i, m6i, c6i, … | Latency-sensitive / stateful services |
+| `freetier` | On-Demand only | m7i-flex, c7i-flex, t3, t3a, t4g | AWS accounts with free-tier or instance-type restrictions |
+
 ```bash
-karpx nodes -c my-cluster              # interactive: analyse + ask + apply/save
-karpx nodes -c my-cluster --mode cost  # skip the question, use cost-optimised
+karpx nodes -c my-cluster                    # interactive: analyse + ask + apply/save
+karpx nodes -c my-cluster --mode cost        # skip the question, use cost-optimised
+karpx nodes -c my-cluster --mode freetier    # free-tier eligible instances only
 ```
 
 ### Non-interactive (CI / scripting)
@@ -167,6 +176,7 @@ karpx uninstall -c my-cluster --delete-namespace
 karpx nodes -c my-cluster
 karpx nodes -c my-cluster --mode cost        # cost-optimised (Spot + Graviton)
 karpx nodes -c my-cluster --mode performance # high-performance (on-demand)
+karpx nodes -c my-cluster --mode freetier   # free-tier eligible instances only
 
 # List NodePools.
 karpx nodepools -c my-cluster
