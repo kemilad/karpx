@@ -590,8 +590,8 @@
           <input type="text" id="field-cluster-name" placeholder="e.g. my-cluster" />
         </div>
         <div class="field-group">
-          <label>Karpenter Node Role ARN</label>
-          <input type="text" id="field-role-arn" placeholder="arn:aws:iam::123:role/KarpenterNodeRole" />
+          <label>Karpenter Node Role <span style="opacity:0.6;font-weight:400">(name or ARN — NOT the controller role)</span></label>
+          <input type="text" id="field-role-arn" placeholder="KarpenterNodeRole-my-cluster  or  arn:aws:iam::123:role/KarpenterNodeRole-my-cluster" />
         </div>
       </div>
     </div>
