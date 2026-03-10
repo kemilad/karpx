@@ -950,21 +950,39 @@
       try {
         const r = await fetch(`/api/versions?k8s=${encodeURIComponent(k8sVer)}`);
         const data = await r.json();
-        if (data.error) throw new Error(data.error);
         _installCompatible = data.compatible || [];
         const vers = data.compatible || [];
-        if (vers.length === 0) {
-          sel.innerHTML = '<option value="">No compatible versions found</option>';
+
+        if (data.error && vers.length === 0) {
+          // GitHub rate-limited — fall back to recommended / custom entry
+          const fallback = data.recommended || recommended || '';
+          sel.innerHTML = '<option value="__custom__">Enter version manually…</option>';
+          document.getElementById('im-custom-wrap').style.display = '';
+          if (fallback) {
+            document.getElementById('im-custom-version').value = fallback;
+          }
+          const hint = document.getElementById('im-version-hint');
+          hint.className = 'hint warn';
+          hint.textContent = `GitHub rate-limited — ${fallback ? 'pre-filled with recommended v' + fallback : 'enter version manually'}`;
+        } else if (vers.length === 0) {
+          sel.innerHTML = '<option value="__custom__">No compatible versions — enter manually…</option>';
+          document.getElementById('im-custom-wrap').style.display = '';
         } else {
           sel.innerHTML = vers.map((v, i) =>
-            `<option value="${esc(v)}"${i === 0 ? ' selected' : ''}>${esc(v)}${i === 0 ? ' (recommended)' : ''}</option>`
+            `<option value="${esc(v)}"${i === 0 ? ' selected' : ''}>${esc(v)}${i === 0 ? ' ✓ recommended' : ''}</option>`
           ).join('') + '<option value="__custom__">Custom version…</option>';
           document.getElementById('im-version-hint').textContent =
             `${vers.length} version${vers.length === 1 ? '' : 's'} compatible with Kubernetes ${k8sVer}`;
         }
       } catch (e) {
-        sel.innerHTML = `<option value="">${esc(e.message)}</option>` +
-          '<option value="__custom__">Enter version manually…</option>';
+        // Network error — fall back to recommended from cluster data
+        const fallback = recommended || '';
+        sel.innerHTML = '<option value="__custom__">Enter version manually…</option>';
+        document.getElementById('im-custom-wrap').style.display = '';
+        if (fallback) document.getElementById('im-custom-version').value = fallback;
+        const hint = document.getElementById('im-version-hint');
+        hint.className = 'hint warn';
+        hint.textContent = `Could not fetch versions: ${e.message}${fallback ? '. Pre-filled: v' + fallback : ''}`;
       }
     } else {
       sel.innerHTML = '<option value="__custom__">Enter version manually…</option>';
