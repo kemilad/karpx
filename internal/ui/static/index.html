@@ -88,10 +88,7 @@
     }
     .btn-ghost:hover { border-color: var(--violet-lt); color: var(--violet-lt); }
 
-    .btn-install {
-      background: rgba(124,58,237,0.12);
-      color: var(--violet-lt);
-      border: 1px solid var(--violet);
+    .btn-install, .btn-uninstall, .btn-nodes {
       border-radius: 6px;
       padding: 0.28rem 0.65rem;
       font-size: 0.75rem;
@@ -99,13 +96,189 @@
       white-space: nowrap;
       transition: all 0.15s;
     }
-    .btn-install:hover:not(:disabled) {
-      background: rgba(124,58,237,0.28);
+    .btn-install {
+      background: rgba(124,58,237,0.12);
+      color: var(--violet-lt);
+      border: 1px solid var(--violet);
     }
-    .btn-install:disabled {
+    .btn-install:hover:not(:disabled) { background: rgba(124,58,237,0.28); }
+
+    .btn-uninstall {
+      background: rgba(239,68,68,0.1);
+      color: var(--red);
+      border: 1px solid rgba(239,68,68,0.4);
+    }
+    .btn-uninstall:hover:not(:disabled) { background: rgba(239,68,68,0.22); }
+
+    .btn-nodes {
+      background: rgba(6,182,212,0.1);
+      color: var(--cyan);
+      border: 1px solid rgba(6,182,212,0.4);
+    }
+    .btn-nodes:hover:not(:disabled) { background: rgba(6,182,212,0.22); }
+
+    .btn-install:disabled, .btn-uninstall:disabled, .btn-nodes:disabled {
       opacity: 0.5;
       cursor: not-allowed;
     }
+
+    /* ── Modal ── */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      width: min(780px, 95vw);
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 1.5rem;
+      position: relative;
+    }
+
+    .modal-title {
+      font-family: var(--mono);
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--violet-lt);
+      margin-bottom: 1.2rem;
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 1rem; right: 1rem;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 0.2rem 0.5rem;
+    }
+    .modal-close:hover { color: var(--text); }
+
+    .modal-section { margin-bottom: 1.2rem; }
+    .modal-section-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .mode-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .btn-mode {
+      background: rgba(107,114,128,0.1);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-mode:hover { border-color: var(--violet-lt); color: var(--violet-lt); }
+    .btn-mode.active {
+      background: rgba(124,58,237,0.2);
+      border-color: var(--violet);
+      color: var(--violet-lt);
+    }
+
+    .field-row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    .field-row label { font-size: 0.78rem; color: var(--text-dim); display: block; margin-bottom: 0.25rem; }
+    .field-row input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      padding: 0.3rem 0.6rem;
+      width: 100%;
+    }
+    .field-group { flex: 1; min-width: 180px; }
+
+    .nodepools-list { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .nodepool-chip {
+      background: rgba(16,185,129,0.1);
+      border: 1px solid rgba(16,185,129,0.3);
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 0.18rem 0.5rem;
+      border-radius: 99px;
+    }
+
+    .manifest-area {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 0.8rem;
+      width: 100%;
+      min-height: 220px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .reasoning-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .reasoning-list li {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      padding: 0.15rem 0;
+    }
+    .reasoning-list li::before { content: "• "; color: var(--cyan); }
+
+    .modal-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
+    .btn-apply {
+      background: rgba(16,185,129,0.15);
+      color: var(--green);
+      border: 1px solid rgba(16,185,129,0.4);
+      border-radius: 6px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-apply:hover:not(:disabled) { background: rgba(16,185,129,0.28); }
+    .btn-download {
+      background: rgba(6,182,212,0.1);
+      color: var(--cyan);
+      border: 1px solid rgba(6,182,212,0.4);
+      border-radius: 6px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-download:hover { background: rgba(6,182,212,0.22); }
+    .btn-generate {
+      background: rgba(124,58,237,0.15);
+      color: var(--violet-lt);
+      border: 1px solid var(--violet);
+      border-radius: 6px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-generate:hover:not(:disabled) { background: rgba(124,58,237,0.28); }
+    .btn-apply:disabled, .btn-generate:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* ── Layout ── */
     main {
@@ -387,6 +560,65 @@
   </div>
 </main>
 
+<!-- ── Node Provisioning Modal ─────────────────────────────────────── -->
+<div class="modal-backdrop" id="nodes-modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeNodesModal()">✕</button>
+    <div class="modal-title" id="modal-title">⚙ Node Provisioning</div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">Existing NodePools</div>
+      <div class="nodepools-list" id="nodepools-list">
+        <span style="color:var(--muted);font-size:0.78rem">Loading…</span>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">Provisioning Mode</div>
+      <div class="mode-btns">
+        <button class="btn-mode active" data-mode="balanced" onclick="selectMode(this)">⚖ Balanced</button>
+        <button class="btn-mode" data-mode="cost" onclick="selectMode(this)">💰 Cost-Optimized</button>
+        <button class="btn-mode" data-mode="performance" onclick="selectMode(this)">⚡ High-Performance</button>
+      </div>
+    </div>
+
+    <div class="modal-section" id="aws-fields" style="display:none">
+      <div class="modal-section-title">AWS Settings</div>
+      <div class="field-row">
+        <div class="field-group">
+          <label>Cluster Name</label>
+          <input type="text" id="field-cluster-name" placeholder="e.g. my-cluster" />
+        </div>
+        <div class="field-group">
+          <label>Karpenter Node Role ARN</label>
+          <input type="text" id="field-role-arn" placeholder="arn:aws:iam::123:role/KarpenterNodeRole" />
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-actions">
+        <button class="btn-generate" id="btn-generate" onclick="doRecommend()">⚙ Generate NodePool Manifest</button>
+      </div>
+    </div>
+
+    <div id="manifest-section" style="display:none">
+      <div class="modal-section">
+        <div class="modal-section-title">Why these instances</div>
+        <ul class="reasoning-list" id="reasoning-list"></ul>
+      </div>
+      <div class="modal-section">
+        <div class="modal-section-title">Generated Manifest</div>
+        <textarea class="manifest-area" id="manifest-area" spellcheck="false"></textarea>
+        <div class="modal-actions">
+          <button class="btn-apply" id="btn-apply" onclick="doApplyManifest()">✓ Apply to Cluster</button>
+          <button class="btn-download" onclick="downloadManifest()">↓ Download YAML</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <footer>
   karpx &mdash; Karpenter managed from your terminal &nbsp;|&nbsp;
   <a href="https://github.com/kemilad/karpx" target="_blank" rel="noopener">GitHub</a>
@@ -448,7 +680,17 @@
 
   function actionCell(cluster) {
     if (cluster.karpenter_installed) {
-      return '<span style="color:var(--muted);font-size:0.75rem">—</span>';
+      const nodesBtn = `<button class="btn-nodes"
+          data-action="nodes"
+          data-context="${esc(cluster.context)}"
+          data-provider="${esc(cluster.provider)}"
+          data-cluster-name="${esc(clusterNameFromContext(cluster.context))}">⚙ Nodes</button>`;
+      const uninstallBtn = `<button class="btn-uninstall"
+          data-action="uninstall"
+          data-context="${esc(cluster.context)}"
+          data-namespace="${esc(cluster.karpenter_namespace || 'karpenter')}"
+          data-release="${esc(cluster.karpenter_release || 'karpenter')}">Uninstall</button>`;
+      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">${nodesBtn}${uninstallBtn}</span>`;
     }
     if (cluster.provider === 'aws') {
       if (cluster.latest_compatible) {
@@ -457,8 +699,6 @@
                   data-context="${esc(cluster.context)}"
                   data-version="${esc(cluster.latest_compatible)}">⚡ Install v${esc(cluster.latest_compatible)}</button>`;
       }
-      // latest_compatible not yet resolved (GitHub API pending/rate-limited) —
-      // show a button that prompts the user to enter a version.
       return `<button class="btn-install"
                 data-action="install-prompt"
                 data-context="${esc(cluster.context)}">⚡ Install…</button>`;
@@ -467,9 +707,6 @@
       return `<a class="btn-install" href="${esc(cluster.docs_url)}"
                target="_blank" rel="noopener">Setup Guide →</a>`;
     }
-    // Provider detection failed or unknown — still show install button so the
-    // user can proceed (common when the EKS endpoint doesn't expose standard
-    // eks.amazonaws.com markers or node lookup times out).
     if (!cluster.error) {
       return `<button class="btn-install"
                 data-action="install-prompt"
@@ -528,24 +765,35 @@
     setTimeout(() => el.remove(), durationMs);
   }
 
-  // ── Install handler (event delegation) ──────────────────────────────────
+  // ── Event delegation for all table action buttons ────────────────────────
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('cluster-tbody').addEventListener('click', async e => {
-      const btn = e.target.closest('[data-action="install"], [data-action="install-prompt"]');
+      const btn = e.target.closest('[data-action]');
       if (!btn || btn.disabled) return;
 
-      if (btn.dataset.action === 'install-prompt') {
-        const ver = window.prompt(
-          'Enter the Karpenter version to install (e.g. 1.3.0).\n' +
-          'Check compatible versions at https://karpenter.sh/docs/upgrading/compatibility/',
-          ''
-        );
-        if (!ver || !ver.trim()) return;
-        btn.dataset.version = ver.trim().replace(/^v/, '');
-        btn.dataset.action  = 'install';
+      switch (btn.dataset.action) {
+        case 'install-prompt': {
+          const ver = window.prompt(
+            'Enter the Karpenter version to install (e.g. 1.3.0).\n' +
+            'Check compatible versions at https://karpenter.sh/docs/upgrading/compatibility/',
+            ''
+          );
+          if (!ver || !ver.trim()) return;
+          btn.dataset.version = ver.trim().replace(/^v/, '');
+          btn.dataset.action  = 'install';
+          await doInstall(btn);
+          break;
+        }
+        case 'install':
+          await doInstall(btn);
+          break;
+        case 'uninstall':
+          await doUninstall(btn);
+          break;
+        case 'nodes':
+          openNodesModal(btn.dataset.context, btn.dataset.provider, btn.dataset.clusterName);
+          break;
       }
-
-      await doInstall(btn);
     });
   });
 
@@ -602,6 +850,179 @@
       btn.innerHTML = origHTML;
     }
   }
+
+  // ── Uninstall ─────────────────────────────────────────────────────────────
+  async function doUninstall(btn) {
+    const ctx       = btn.dataset.context;
+    const namespace = btn.dataset.namespace || 'karpenter';
+    const release   = btn.dataset.release   || 'karpenter';
+
+    if (!confirm(`Uninstall Karpenter from "${ctx}"?\n\nThis removes the controller. NodePool/EC2NodeClass resources will NOT be deleted automatically.`)) return;
+
+    btn.disabled = true;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;margin-right:0.4rem"></span>Removing…';
+
+    try {
+      const resp = await fetch('/api/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: ctx, namespace, release }),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        showToast(`✓ Karpenter uninstalled from ${ctx}`, 'success', 6000);
+        await refresh();
+      } else {
+        showToast(`Uninstall failed: ${result.error || 'unknown error'}`, 'error', 8000);
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
+    } catch (err) {
+      showToast(`Uninstall error: ${err.message}`, 'error', 8000);
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  }
+
+  // ── Node provisioning modal ───────────────────────────────────────────────
+  let _nodesCtx = '';
+  let _nodesProvider = '';
+
+  function openNodesModal(ctx, provider, clusterName) {
+    _nodesCtx      = ctx;
+    _nodesProvider = provider;
+
+    document.getElementById('modal-title').textContent = `⚙ Node Provisioning — ${ctx}`;
+    document.getElementById('manifest-section').style.display = 'none';
+    document.getElementById('reasoning-list').innerHTML = '';
+    document.getElementById('manifest-area').value = '';
+
+    // Show/hide AWS fields
+    const awsFields = document.getElementById('aws-fields');
+    if (provider === 'aws') {
+      awsFields.style.display = '';
+      document.getElementById('field-cluster-name').value = clusterName || '';
+      document.getElementById('field-role-arn').value = '';
+    } else {
+      awsFields.style.display = 'none';
+    }
+
+    // Reset mode selection to balanced
+    document.querySelectorAll('.btn-mode').forEach(b => b.classList.toggle('active', b.dataset.mode === 'balanced'));
+
+    document.getElementById('nodes-modal').classList.add('open');
+
+    // Fetch existing NodePools
+    const list = document.getElementById('nodepools-list');
+    list.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">Loading…</span>';
+    fetch(`/api/nodepools?context=${encodeURIComponent(ctx)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.node_pools || data.node_pools.length === 0) {
+          list.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">None — no NodePools found</span>';
+        } else {
+          list.innerHTML = data.node_pools.map(n => `<span class="nodepool-chip">${esc(n)}</span>`).join('');
+        }
+      })
+      .catch(() => { list.innerHTML = '<span style="color:var(--red);font-size:0.78rem">Could not fetch NodePools</span>'; });
+  }
+
+  function closeNodesModal() {
+    document.getElementById('nodes-modal').classList.remove('open');
+  }
+
+  function selectMode(btn) {
+    document.querySelectorAll('.btn-mode').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+
+  async function doRecommend() {
+    const mode        = document.querySelector('.btn-mode.active')?.dataset.mode || 'balanced';
+    const clusterName = document.getElementById('field-cluster-name')?.value.trim() || '';
+    const roleARN     = document.getElementById('field-role-arn')?.value.trim()     || '';
+
+    const genBtn = document.getElementById('btn-generate');
+    genBtn.disabled = true;
+    genBtn.textContent = 'Generating…';
+
+    try {
+      const resp = await fetch('/api/nodes/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _nodesCtx, mode, cluster_name: clusterName, role_arn: roleARN }),
+      });
+      const data = await resp.json();
+      if (data.error) {
+        showToast(`Recommendation failed: ${data.error}`, 'error', 8000);
+        return;
+      }
+      document.getElementById('manifest-area').value = data.manifest || '';
+      const rl = document.getElementById('reasoning-list');
+      rl.innerHTML = (data.reasoning || []).map(r => `<li>${esc(r)}</li>`).join('');
+      document.getElementById('manifest-section').style.display = '';
+    } catch (err) {
+      showToast(`Error: ${err.message}`, 'error', 8000);
+    } finally {
+      genBtn.disabled = false;
+      genBtn.textContent = '⚙ Generate NodePool Manifest';
+    }
+  }
+
+  async function doApplyManifest() {
+    const manifest = document.getElementById('manifest-area').value;
+    if (!manifest.trim()) return;
+
+    if (!confirm(`Apply this NodePool manifest to cluster "${_nodesCtx}"?`)) return;
+
+    const applyBtn = document.getElementById('btn-apply');
+    applyBtn.disabled = true;
+    applyBtn.textContent = 'Applying…';
+
+    try {
+      const resp = await fetch('/api/nodes/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _nodesCtx, manifest }),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        showToast('✓ NodePool manifest applied', 'success', 6000);
+        // Refresh nodepools list inside modal
+        fetch(`/api/nodepools?context=${encodeURIComponent(_nodesCtx)}`)
+          .then(r => r.json())
+          .then(data => {
+            const list = document.getElementById('nodepools-list');
+            list.innerHTML = (data.node_pools || []).map(n => `<span class="nodepool-chip">${esc(n)}</span>`).join('') ||
+              '<span style="color:var(--muted);font-size:0.78rem">None</span>';
+          });
+      } else {
+        showToast(`Apply failed: ${result.error || 'unknown error'}`, 'error', 8000);
+      }
+    } catch (err) {
+      showToast(`Apply error: ${err.message}`, 'error', 8000);
+    } finally {
+      applyBtn.disabled = false;
+      applyBtn.textContent = '✓ Apply to Cluster';
+    }
+  }
+
+  function downloadManifest() {
+    const manifest = document.getElementById('manifest-area').value;
+    if (!manifest.trim()) return;
+    const blob = new Blob([manifest], { type: 'text/yaml' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'karpx-nodepool.yaml';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Close modal on backdrop click
+  document.getElementById('nodes-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('nodes-modal')) closeNodesModal();
+  });
 
   // ── Data refresh ─────────────────────────────────────────────────────────
   async function refresh() {
