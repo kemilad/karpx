@@ -48,11 +48,19 @@ type ClusterStatus struct {
 
 // InstallRequest is the JSON body for POST /api/install.
 type InstallRequest struct {
-	Context     string `json:"context"`
-	Version     string `json:"version"`
-	Namespace   string `json:"namespace"`
-	ClusterName string `json:"cluster_name"`
-	Region      string `json:"region"`
+	Context           string `json:"context"`
+	Version           string `json:"version"`
+	Namespace         string `json:"namespace"`
+	ClusterName       string `json:"cluster_name"`
+	Region            string `json:"region"`
+	ControllerRoleARN string `json:"controller_role_arn"`
+}
+
+// VersionsResponse is returned by GET /api/versions.
+type VersionsResponse struct {
+	Recommended string   `json:"recommended"`
+	Compatible  []string `json:"compatible"`
+	Error       string   `json:"error,omitempty"`
 }
 
 // InstallResponse is the JSON body returned by POST /api/install.
@@ -71,12 +79,13 @@ type UninstallRequest struct {
 
 // UpgradeRequest is the JSON body for POST /api/upgrade.
 type UpgradeRequest struct {
-	Context     string `json:"context"`
-	Version     string `json:"version"`
-	Namespace   string `json:"namespace"`
-	Release     string `json:"release"`
-	ClusterName string `json:"cluster_name"`
-	Region      string `json:"region"`
+	Context           string `json:"context"`
+	Version           string `json:"version"`
+	Namespace         string `json:"namespace"`
+	Release           string `json:"release"`
+	ClusterName       string `json:"cluster_name"`
+	Region            string `json:"region"`
+	ControllerRoleARN string `json:"controller_role_arn"`
 }
 
 // NodePoolDetail is a single NodePool with full status, returned by /api/nodepools.
@@ -169,6 +178,23 @@ func Serve(port int, kubeCtx string) error {
 		json.NewEncoder(w).Encode(results)
 	})
 
+	// ── Compatible versions for a K8s version ──────────────────────────────
+	mux.HandleFunc("/api/versions", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		k8sVer := r.URL.Query().Get("k8s")
+		if k8sVer == "" {
+			json.NewEncoder(w).Encode(VersionsResponse{Error: "k8s query param required"})
+			return
+		}
+		latest, all, err := compat.LatestCompatible(k8sVer)
+		if err != nil {
+			json.NewEncoder(w).Encode(VersionsResponse{Error: err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(VersionsResponse{Recommended: latest, Compatible: all})
+	})
+
 	mux.HandleFunc("/api/install", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -203,6 +229,10 @@ func Serve(port int, kubeCtx string) error {
 			"--set", "settings.clusterName=" + req.ClusterName,
 			"--set", "controller.env[0].name=AWS_REGION",
 			"--set", "controller.env[0].value=" + req.Region,
+		}
+		if req.ControllerRoleARN != "" {
+			args = append(args, "--set",
+				`serviceAccount.annotations.eks\.amazonaws\.com/role-arn=`+req.ControllerRoleARN)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -301,6 +331,10 @@ func Serve(port int, kubeCtx string) error {
 				"--set", "controller.env[0].name=AWS_REGION",
 				"--set", "controller.env[0].value="+req.Region,
 			)
+		}
+		if req.ControllerRoleARN != "" {
+			args = append(args, "--set",
+				`serviceAccount.annotations.eks\.amazonaws\.com/role-arn=`+req.ControllerRoleARN)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()

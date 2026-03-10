@@ -507,6 +507,34 @@
       to   { transform: translateY(0);   opacity: 1; }
     }
 
+    /* ── Install Modal ── */
+    .install-modal-field { margin-bottom: 0.9rem; }
+    .install-modal-field label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-bottom: 0.3rem;
+    }
+    .install-modal-field input,
+    .install-modal-field select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      padding: 0.4rem 0.6rem;
+    }
+    .install-modal-field select option { background: var(--surface); }
+    .install-modal-field .hint {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+    .install-modal-field .hint.warn { color: var(--amber); }
+    .install-modal-field .hint.err  { color: var(--red); }
+
     /* ── Footer ── */
     footer {
       text-align: center;
@@ -598,6 +626,55 @@
     </table>
   </div>
 </main>
+
+<!-- ── Install Modal ──────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="install-modal">
+  <div class="modal" style="max-width:540px">
+    <button class="modal-close" onclick="closeInstallModal()">✕</button>
+    <div class="modal-title">⚡ Install Karpenter</div>
+
+    <div class="install-modal-field">
+      <label>Cluster context</label>
+      <input type="text" id="im-context" readonly style="opacity:0.6" />
+    </div>
+    <div class="install-modal-field">
+      <label>Kubernetes version</label>
+      <input type="text" id="im-k8s-ver" readonly style="opacity:0.6" />
+    </div>
+    <div class="install-modal-field">
+      <label>Karpenter version</label>
+      <select id="im-version-select" onchange="onInstallVersionChange()">
+        <option value="">Loading compatible versions…</option>
+      </select>
+      <div id="im-version-hint" class="hint"></div>
+    </div>
+    <div class="install-modal-field" id="im-custom-wrap" style="display:none">
+      <label>Custom version (e.g. 1.2.3)</label>
+      <input type="text" id="im-custom-version" placeholder="1.2.3"
+             oninput="onCustomVersionInput()" />
+      <div id="im-custom-hint" class="hint"></div>
+    </div>
+    <div class="install-modal-field">
+      <label>Cluster name <span style="color:var(--muted);font-weight:400">(settings.clusterName)</span></label>
+      <input type="text" id="im-cluster-name" placeholder="my-cluster" />
+    </div>
+    <div class="install-modal-field">
+      <label>AWS region</label>
+      <input type="text" id="im-region" placeholder="us-east-1" />
+    </div>
+    <div class="install-modal-field">
+      <label>Karpenter Controller Role ARN <span style="color:var(--muted);font-weight:400">(for IRSA — required on AWS)</span></label>
+      <input type="text" id="im-controller-role"
+             placeholder="arn:aws:iam::123456789:role/karpx-karpenter-controller" />
+      <div class="hint">The IAM role the Karpenter controller pods assume. Without this, pods will crashloop.</div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:1rem">
+      <button class="btn-apply" id="im-install-btn" onclick="doInstallFromModal()">⚡ Install</button>
+      <button class="btn-ghost" onclick="closeInstallModal()">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── Node Provisioning Modal ─────────────────────────────────────── -->
 <div class="modal-backdrop" id="nodes-modal">
@@ -742,15 +819,11 @@
       return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">${upgradeBtn}${nodesBtn}${uninstallBtn}</span>`;
     }
     if (cluster.provider === 'aws') {
-      if (cluster.latest_compatible) {
-        return `<button class="btn-install"
-                  data-action="install"
-                  data-context="${esc(cluster.context)}"
-                  data-version="${esc(cluster.latest_compatible)}">⚡ Install v${esc(cluster.latest_compatible)}</button>`;
-      }
       return `<button class="btn-install"
-                data-action="install-prompt"
-                data-context="${esc(cluster.context)}">⚡ Install…</button>`;
+                data-action="install-modal"
+                data-context="${esc(cluster.context)}"
+                data-k8s-ver="${esc(cluster.k8s_version || '')}"
+                data-recommended="${esc(cluster.latest_compatible || '')}">⚡ Install…</button>`;
     }
     if ((cluster.provider === 'azure' || cluster.provider === 'gcp') && cluster.docs_url) {
       return `<a class="btn-install" href="${esc(cluster.docs_url)}"
@@ -758,8 +831,10 @@
     }
     if (!cluster.error) {
       return `<button class="btn-install"
-                data-action="install-prompt"
-                data-context="${esc(cluster.context)}">⚡ Install…</button>`;
+                data-action="install-modal"
+                data-context="${esc(cluster.context)}"
+                data-k8s-ver="${esc(cluster.k8s_version || '')}"
+                data-recommended="">⚡ Install…</button>`;
     }
     return '<span style="color:var(--muted);font-size:0.75rem">—</span>';
   }
@@ -821,20 +896,8 @@
       if (!btn || btn.disabled) return;
 
       switch (btn.dataset.action) {
-        case 'install-prompt': {
-          const ver = window.prompt(
-            'Enter the Karpenter version to install (e.g. 1.3.0).\n' +
-            'Check compatible versions at https://karpenter.sh/docs/upgrading/compatibility/',
-            ''
-          );
-          if (!ver || !ver.trim()) return;
-          btn.dataset.version = ver.trim().replace(/^v/, '');
-          btn.dataset.action  = 'install';
-          await doInstall(btn);
-          break;
-        }
-        case 'install':
-          await doInstall(btn);
+        case 'install-modal':
+          openInstallModal(btn.dataset.context, btn.dataset.k8sVer, btn.dataset.recommended);
           break;
         case 'upgrade':
           await doUpgrade(btn);
@@ -860,53 +923,140 @@
     return parseEksContext(ctx).clusterName;
   }
 
-  async function doInstall(btn) {
-    const ctx     = btn.dataset.context;
-    const version = btn.dataset.version;
+  // ── Install Modal ─────────────────────────────────────────────────────────
+  let _installK8sVer = '';
+  let _installCompatible = [];
 
-    const parsed = parseEksContext(ctx);
+  async function openInstallModal(ctx, k8sVer, recommended) {
+    _installK8sVer = k8sVer || '';
+    _installCompatible = [];
 
-    const clusterName = window.prompt(
-      `Enter the EKS cluster name for settings.clusterName:`,
-      parsed.clusterName
-    );
-    if (!clusterName || !clusterName.trim()) return;
+    document.getElementById('im-context').value    = ctx;
+    document.getElementById('im-k8s-ver').value    = k8sVer || '—';
+    document.getElementById('im-cluster-name').value = clusterNameFromContext(ctx);
+    document.getElementById('im-region').value     = parseEksContext(ctx).region || '';
+    document.getElementById('im-controller-role').value = '';
+    document.getElementById('im-version-hint').textContent = '';
+    document.getElementById('im-custom-hint').textContent  = '';
+    document.getElementById('im-custom-wrap').style.display = 'none';
+    document.getElementById('im-install-btn').disabled = false;
 
-    const region = window.prompt(
-      `Enter the AWS region (e.g. us-east-1):`,
-      parsed.region
-    );
-    if (!region || !region.trim()) return;
+    const sel = document.getElementById('im-version-select');
+    sel.innerHTML = '<option value="">Fetching compatible versions…</option>';
+    document.getElementById('install-modal').classList.add('open');
 
-    if (!confirm(`Install Karpenter v${version} on cluster "${ctx}"?\n\nFor AWS EKS, IAM role configuration will be needed for full controller functionality.`)) {
-      return;
+    // Fetch compatible versions from GitHub via backend
+    if (k8sVer) {
+      try {
+        const r = await fetch(`/api/versions?k8s=${encodeURIComponent(k8sVer)}`);
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        _installCompatible = data.compatible || [];
+        const vers = data.compatible || [];
+        if (vers.length === 0) {
+          sel.innerHTML = '<option value="">No compatible versions found</option>';
+        } else {
+          sel.innerHTML = vers.map((v, i) =>
+            `<option value="${esc(v)}"${i === 0 ? ' selected' : ''}>${esc(v)}${i === 0 ? ' (recommended)' : ''}</option>`
+          ).join('') + '<option value="__custom__">Custom version…</option>';
+          document.getElementById('im-version-hint').textContent =
+            `${vers.length} version${vers.length === 1 ? '' : 's'} compatible with Kubernetes ${k8sVer}`;
+        }
+      } catch (e) {
+        sel.innerHTML = `<option value="">${esc(e.message)}</option>` +
+          '<option value="__custom__">Enter version manually…</option>';
+      }
+    } else {
+      sel.innerHTML = '<option value="__custom__">Enter version manually…</option>';
+      document.getElementById('im-custom-wrap').style.display = '';
+    }
+  }
+
+  function closeInstallModal() {
+    document.getElementById('install-modal').classList.remove('open');
+  }
+
+  function onInstallVersionChange() {
+    const sel = document.getElementById('im-version-select');
+    const customWrap = document.getElementById('im-custom-wrap');
+    customWrap.style.display = sel.value === '__custom__' ? '' : 'none';
+    document.getElementById('im-custom-hint').textContent = '';
+    document.getElementById('im-version-hint').textContent =
+      sel.value && sel.value !== '__custom__'
+        ? `✓ Compatible with Kubernetes ${_installK8sVer}`
+        : '';
+  }
+
+  function onCustomVersionInput() {
+    const raw = document.getElementById('im-custom-version').value.trim().replace(/^v/, '');
+    const hint = document.getElementById('im-custom-hint');
+    if (!raw || !_installK8sVer) { hint.textContent = ''; return; }
+    if (_installCompatible.length > 0) {
+      const ok = _installCompatible.includes(raw);
+      hint.className = `hint ${ok ? '' : 'err'}`;
+      hint.textContent = ok
+        ? `✓ v${raw} is compatible with Kubernetes ${_installK8sVer}`
+        : `✗ v${raw} is NOT compatible with Kubernetes ${_installK8sVer}. Recommended: v${_installCompatible[0]}`;
+    }
+  }
+
+  async function doInstallFromModal() {
+    const ctx     = document.getElementById('im-context').value;
+    const k8sVer  = _installK8sVer;
+    const sel     = document.getElementById('im-version-select');
+    const clusterName      = document.getElementById('im-cluster-name').value.trim();
+    const region           = document.getElementById('im-region').value.trim();
+    const controllerRoleARN = document.getElementById('im-controller-role').value.trim();
+
+    let version = sel.value === '__custom__'
+      ? document.getElementById('im-custom-version').value.trim().replace(/^v/, '')
+      : sel.value;
+
+    if (!version) { showToast('Select or enter a Karpenter version', 'error'); return; }
+    if (!clusterName) { showToast('Cluster name is required', 'error'); return; }
+    if (!region) { showToast('AWS region is required', 'error'); return; }
+
+    // Compatibility check for custom versions
+    if (sel.value === '__custom__' && _installCompatible.length > 0 && !_installCompatible.includes(version)) {
+      if (!confirm(`v${version} may not be compatible with Kubernetes ${k8sVer}.\nRecommended: v${_installCompatible[0]}\n\nInstall anyway?`)) return;
     }
 
+    const btn = document.getElementById('im-install-btn');
     btn.disabled = true;
-    const origHTML = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;margin-right:0.4rem"></span>Installing…';
+    btn.textContent = 'Installing…';
 
     try {
       const resp = await fetch('/api/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: ctx, version: version, cluster_name: clusterName.trim(), region: region.trim() }),
+        body: JSON.stringify({
+          context: ctx,
+          version,
+          cluster_name: clusterName,
+          region,
+          controller_role_arn: controllerRoleARN,
+        }),
       });
       const result = await resp.json();
       if (result.success) {
+        closeInstallModal();
         showToast(`✓ Karpenter v${version} installed on ${ctx}`, 'success', 6000);
         await refresh();
       } else {
-        showToast(`Install failed: ${result.error || 'unknown error'}`, 'error', 8000);
-        btn.disabled = false;
-        btn.innerHTML = origHTML;
+        showToast(`Install failed: ${result.error || 'unknown error'}`, 'error', 10000);
       }
     } catch (err) {
       showToast(`Install error: ${err.message}`, 'error', 8000);
+    } finally {
       btn.disabled = false;
-      btn.innerHTML = origHTML;
+      btn.textContent = '⚡ Install';
     }
   }
+
+  // Close install modal on backdrop click
+  document.getElementById('install-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('install-modal')) closeInstallModal();
+  });
 
   // ── Upgrade ───────────────────────────────────────────────────────────────
   async function doUpgrade(btn) {
