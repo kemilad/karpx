@@ -341,11 +341,35 @@ func runInstall(kubeCtx, providerFlag, clusterName, region, roleARN, karpVer, in
 
 // ── AWS EKS install flow ──────────────────────────────────────────────────────
 
+// eksClusterNameFromContext extracts the short cluster name from an EKS
+// kubeconfig context, which is often a full ARN like:
+//   arn:aws:eks:us-east-1:123456789:cluster/my-cluster
+func eksClusterNameFromContext(ctx string) string {
+	if strings.HasPrefix(ctx, "arn:aws:eks:") {
+		if i := strings.LastIndex(ctx, "/"); i >= 0 {
+			return ctx[i+1:]
+		}
+	}
+	return ctx
+}
+
+// stripARN returns just the cluster name, stripping a full EKS ARN if the user
+// accidentally entered one instead of just the name.
+func stripARN(name string) string {
+	if strings.HasPrefix(name, "arn:aws:eks:") {
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			return name[i+1:]
+		}
+	}
+	return name
+}
+
 func runInstallAWS(kubeCtx, namespace, clusterName, region, roleARN, karpVer, intQueue string) error {
 	fmt.Println()
 	printSection("Step 3: Cluster information (AWS EKS)")
 
-	clusterName = askIfEmpty(clusterName, "EKS cluster name", "")
+	defaultName := eksClusterNameFromContext(kubeCtx)
+	clusterName = stripARN(askIfEmpty(clusterName, "EKS cluster name", defaultName))
 	if clusterName == "" {
 		return fmt.Errorf("cluster name is required for AWS EKS installation")
 	}
