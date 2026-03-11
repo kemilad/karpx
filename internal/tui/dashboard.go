@@ -378,6 +378,11 @@ func checkCluster(c ClusterEntry) tea.Cmd {
 		c.K8sVersion = k8sVer
 
 		// ── Step 4: check compatibility (AWS provider only for now) ─────────
+		// If installed but version is unknown (detected outside Helm), treat as
+		// upgrade-needed so the user is offered the upgrade action.
+		if c.Installed && c.ChartVersion == "" {
+			c.UpgradeNeeded = true
+		}
 		if c.Installed && c.ChartVersion != "" && c.Provider == kube.ProviderAWS {
 			c.Incompatible = !compat.IsCompatible(c.ChartVersion, k8sVer)
 			if c.Incompatible {

@@ -792,8 +792,10 @@ func inspectContext(ctx string) ClusterStatus {
 
 		if info.Installed {
 			installed := strings.TrimPrefix(info.Version, "v")
-			ok := compat.IsCompatible(installed, k8sVer)
-			s.Compatible = &ok
+			if installed != "" {
+				ok := compat.IsCompatible(installed, k8sVer)
+				s.Compatible = &ok
+			}
 			if latest != "" && latest != installed {
 				s.UpgradeAvailable = true
 				s.LatestCompatible = latest

@@ -148,11 +148,15 @@ func runDetect(kubeCtx string) error {
 	if !info.Installed {
 		fmt.Printf("  Karpenter           : not installed\n")
 	} else {
-		fmt.Printf("  Karpenter version   : %s\n", info.Version)
+		if info.Version != "" {
+			fmt.Printf("  Karpenter version   : %s\n", info.Version)
+		} else {
+			fmt.Printf("  Karpenter version   : unknown (installed outside Helm)\n")
+		}
 		fmt.Printf("  Namespace           : %s\n", info.Namespace)
 
 		// Compatibility is defined for AWS only (other providers have their own matrices).
-		if provider == kube.ProviderAWS {
+		if provider == kube.ProviderAWS && info.Version != "" {
 			if compat.IsCompatible(info.Version, k8sVer) {
 				fmt.Printf("  Compatibility       : ✓  compatible with Kubernetes %s\n", k8sVer)
 			} else {
@@ -185,7 +189,10 @@ func runDetect(kubeCtx string) error {
 		}
 
 		installed := strings.TrimPrefix(info.Version, "v")
-		if !compat.IsCompatible(installed, k8sVer) {
+		if installed == "" {
+			fmt.Printf("\n  ▲ Version unknown — upgrade recommended:\n")
+			fmt.Printf("  ► karpx upgrade -c %s --version v%s\n\n", contextOrCurrent(kubeCtx), latest)
+		} else if !compat.IsCompatible(installed, k8sVer) {
 			fmt.Printf("\n  ✗ Installed Karpenter is incompatible — upgrade required.\n")
 			fmt.Printf("  ► karpx upgrade -c %s --version v%s\n\n", contextOrCurrent(kubeCtx), latest)
 		} else if installed != latest {

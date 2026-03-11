@@ -4,10 +4,15 @@
 package helm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Info describes the Karpenter installation found (or not) on a cluster.
@@ -61,7 +66,11 @@ func DetectKarpenter(kubeCtx string) (*Info, error) {
 			}, nil
 		}
 	}
-	return &Info{Installed: false}, nil
+
+	// Helm didn't find Karpenter — fall back to Kubernetes API detection.
+	// This covers clusters where Karpenter was installed outside of Helm
+	// (raw manifests, older tooling, operators, etc.).
+	return detectViaKubeAPI(kubeCtx)
 }
 
 // isKarpenterRelease returns true when the Helm release name or chart name
@@ -70,6 +79,79 @@ func isKarpenterRelease(r helmRelease) bool {
 	name := strings.ToLower(r.Name)
 	chart := strings.ToLower(r.Chart)
 	return strings.Contains(name, "karpenter") || strings.Contains(chart, "karpenter")
+}
+
+// detectViaKubeAPI is a fallback for clusters where Karpenter was not installed
+// through Helm. It checks the cluster's API server for the karpenter.sh API
+// group (which confirms the CRDs are registered) and then looks for a
+// Deployment labelled app.kubernetes.io/name=karpenter to determine the
+// version from the controller image tag.
+func detectViaKubeAPI(kubeCtx string) (*Info, error) {
+	overrides := &clientcmd.ConfigOverrides{}
+	if kubeCtx != "" {
+		overrides.CurrentContext = kubeCtx
+	}
+	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), overrides,
+	).ClientConfig()
+	if err != nil {
+		return &Info{Installed: false}, nil
+	}
+	cs, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return &Info{Installed: false}, nil
+	}
+
+	// Confirm Karpenter CRDs are registered by checking API groups.
+	groups, err := cs.Discovery().ServerGroups()
+	if err != nil {
+		return &Info{Installed: false}, nil
+	}
+	hasCRDs := false
+	for _, g := range groups.Groups {
+		if strings.Contains(g.Name, "karpenter") {
+			hasCRDs = true
+			break
+		}
+	}
+	if !hasCRDs {
+		return &Info{Installed: false}, nil
+	}
+
+	// CRDs exist — now find the controller Deployment to get the version.
+	deps, err := cs.AppsV1().Deployments("").List(context.TODO(), metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=karpenter",
+	})
+	if err != nil || len(deps.Items) == 0 {
+		// CRDs present but no standard deployment found; still installed.
+		return &Info{Installed: true}, nil
+	}
+
+	dep := deps.Items[0]
+	version := ""
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if v := imageTagVersion(c.Image); v != "" {
+			version = v
+			break
+		}
+	}
+
+	return &Info{
+		Installed:   true,
+		ReleaseName: dep.Name,
+		Version:     version,
+		Namespace:   dep.Namespace,
+	}, nil
+}
+
+// imageTagVersion extracts a semver-like version string from a container image
+// reference. E.g. "public.ecr.aws/karpenter/controller:v1.2.1" → "1.2.1".
+func imageTagVersion(image string) string {
+	idx := strings.LastIndex(image, ":")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimPrefix(image[idx+1:], "v")
 }
 
 // EnsureHelmAvailable returns an error when helm is not on PATH.
