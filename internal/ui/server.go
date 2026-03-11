@@ -7,6 +7,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -517,7 +518,19 @@ func Serve(port int, kubeCtx string) error {
 		if kubeCtxParam != "" {
 			npArgs = append(npArgs, "--context", kubeCtxParam)
 		}
-		if npOut, err := exec.CommandContext(r.Context(), "kubectl", npArgs...).Output(); err == nil {
+		npOut, npErr := exec.CommandContext(r.Context(), "kubectl", npArgs...).Output()
+		if npErr != nil {
+			var exitErr *exec.ExitError
+			if errors.As(npErr, &exitErr) {
+				errStr := strings.TrimSpace(string(exitErr.Stderr))
+				// Treat "CRDs not installed" as an empty list, not an error.
+				if errStr != "" &&
+					!strings.Contains(errStr, "no matches for kind") &&
+					!strings.Contains(errStr, "the server doesn't have a resource type") {
+					resp.Error = errStr
+				}
+			}
+		} else {
 			var list k8sList
 			if json.Unmarshal(npOut, &list) == nil {
 				for _, raw := range list.Items {
@@ -543,7 +556,8 @@ func Serve(port int, kubeCtx string) error {
 		if kubeCtxParam != "" {
 			ncArgs = append(ncArgs, "--context", kubeCtxParam)
 		}
-		if ncOut, err := exec.CommandContext(r.Context(), "kubectl", ncArgs...).Output(); err == nil {
+		ncOut, ncErr := exec.CommandContext(r.Context(), "kubectl", ncArgs...).Output()
+		if ncErr == nil {
 			var list k8sList
 			if json.Unmarshal(ncOut, &list) == nil {
 				for _, raw := range list.Items {

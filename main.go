@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1107,12 +1109,150 @@ func nodePoolsCmd() *cobra.Command {
 		Short:   "List NodePools and EC2NodeClasses on a cluster",
 		Example: "  karpx nodepools -c my-cluster\n  karpx np -c my-cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("  karpx nodepools  context:%s\n", contextOrCurrent(kubeCtx))
-			return nil
+			return runNodePools(kubeCtx)
 		},
 	}
 	cmd.Flags().StringVarP(&kubeCtx, "context", "c", "", "kubeconfig context")
 	return cmd
+}
+
+func runNodePools(kubeCtx string) error {
+	fmt.Printf("\n  NodePools / EC2NodeClasses  context:%s\n\n", contextOrCurrent(kubeCtx))
+
+	// ── NodePools ─────────────────────────────────────────────────────────
+	npArgs := []string{"get", "nodepools", "-o", "json"}
+	if kubeCtx != "" {
+		npArgs = append(npArgs, "--context", kubeCtx)
+	}
+	npOut, npErr := exec.Command("kubectl", npArgs...).Output()
+	if npErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(npErr, &exitErr) {
+			errStr := strings.TrimSpace(string(exitErr.Stderr))
+			if strings.Contains(errStr, "no matches for kind") ||
+				strings.Contains(errStr, "the server doesn't have a resource type") {
+				fmt.Printf("  NodePools    : Karpenter CRDs not found — is Karpenter installed?\n\n")
+				return nil
+			}
+			fmt.Printf("  ✗ kubectl error: %s\n\n", errStr)
+			return nil
+		}
+		fmt.Printf("  ✗ kubectl not found on PATH\n\n")
+		return nil
+	}
+
+	type k8sCond struct {
+		Type    string `json:"type"`
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Reason  string `json:"reason"`
+	}
+	type k8sMeta struct {
+		Metadata struct {
+			Name        string            `json:"name"`
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+		Spec struct {
+			Limits map[string]string `json:"limits"`
+		} `json:"spec"`
+		Status struct {
+			Conditions []k8sCond `json:"conditions"`
+		} `json:"status"`
+	}
+	type k8sList struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	readyStatus := func(m k8sMeta) (bool, string) {
+		for _, c := range m.Status.Conditions {
+			if c.Type == "Ready" {
+				if c.Status == "True" {
+					return true, ""
+				}
+				msg := c.Reason
+				if c.Message != "" {
+					msg = c.Message
+				}
+				return false, msg
+			}
+		}
+		return false, "unknown"
+	}
+
+	var npList k8sList
+	_ = json.Unmarshal(npOut, &npList)
+
+	fmt.Printf("  NodePools (%d)\n", len(npList.Items))
+	if len(npList.Items) == 0 {
+		fmt.Printf("    None found.\n")
+	} else {
+		fmt.Printf("  %-26s  %-16s  %-22s  %s\n", "NAME", "MODE", "LIMITS (cpu / mem)", "READY")
+		fmt.Printf("  %s\n", strings.Repeat("─", 80))
+		for _, raw := range npList.Items {
+			var m k8sMeta
+			if err := json.Unmarshal(raw, &m); err != nil {
+				continue
+			}
+			ready, notReadyMsg := readyStatus(m)
+			readyStr := "✓"
+			if !ready {
+				readyStr = "✗"
+			}
+			cpu := m.Spec.Limits["cpu"]
+			mem := m.Spec.Limits["memory"]
+			lim := "—"
+			if cpu != "" || mem != "" {
+				lim = fmt.Sprintf("%s / %s", cpu, mem)
+			}
+			mode := m.Metadata.Annotations["karpx.io/generated-mode"]
+			if mode == "" {
+				mode = "—"
+			}
+			fmt.Printf("  %-26s  %-16s  %-22s  %s\n", m.Metadata.Name, mode, lim, readyStr)
+			if !ready && notReadyMsg != "" {
+				fmt.Printf("    └ %s\n", notReadyMsg)
+			}
+		}
+	}
+
+	fmt.Println()
+
+	// ── EC2NodeClasses ────────────────────────────────────────────────────
+	ncArgs := []string{"get", "ec2nodeclasses", "-o", "json"}
+	if kubeCtx != "" {
+		ncArgs = append(ncArgs, "--context", kubeCtx)
+	}
+	ncOut, ncErr := exec.Command("kubectl", ncArgs...).Output()
+
+	var ncList k8sList
+	if ncErr == nil {
+		_ = json.Unmarshal(ncOut, &ncList)
+	}
+
+	fmt.Printf("  EC2NodeClasses (%d)\n", len(ncList.Items))
+	if len(ncList.Items) == 0 {
+		fmt.Printf("    None found.\n")
+	} else {
+		fmt.Printf("  %-26s  %s\n", "NAME", "READY")
+		fmt.Printf("  %s\n", strings.Repeat("─", 40))
+		for _, raw := range ncList.Items {
+			var m k8sMeta
+			if err := json.Unmarshal(raw, &m); err != nil {
+				continue
+			}
+			ready, notReadyMsg := readyStatus(m)
+			readyStr := "✓"
+			if !ready {
+				readyStr = "✗"
+			}
+			fmt.Printf("  %-26s  %s\n", m.Metadata.Name, readyStr)
+			if !ready && notReadyMsg != "" {
+				fmt.Printf("    └ %s\n", notReadyMsg)
+			}
+		}
+	}
+
+	fmt.Println()
+	return nil
 }
 
 func versionCmd() *cobra.Command {

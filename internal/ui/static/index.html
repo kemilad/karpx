@@ -1376,6 +1376,12 @@
     fetch(`/api/nodepools?context=${encodeURIComponent(ctx)}`)
       .then(r => r.json())
       .then(data => {
+        // Surface any kubectl error returned by the server.
+        if (data.error) {
+          npList.innerHTML = `<span style="color:var(--red);font-size:0.78rem">Error: ${esc(data.error)}</span>`;
+          ncList.innerHTML = '';
+          return;
+        }
         // NodePools table
         if (!data.node_pools || data.node_pools.length === 0) {
           npList.innerHTML = '<span style="color:var(--muted);font-size:0.78rem">None found</span>';

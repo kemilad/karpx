@@ -46,13 +46,16 @@ func DetectKarpenter(kubeCtx string) (*Info, error) {
 
 	out, err := exec.Command("helm", args...).Output()
 	if err != nil {
-		// helm not installed or cluster unreachable — treat as not installed.
-		return &Info{Installed: false}, nil
+		// helm is not available or the invocation failed — fall back to the
+		// Kubernetes API so we still detect Karpenter installed via manifests
+		// or when helm is broken/absent.
+		return detectViaKubeAPI(kubeCtx)
 	}
 
 	var releases []helmRelease
 	if err := json.Unmarshal(out, &releases); err != nil {
-		return &Info{Installed: false}, nil
+		// Malformed output from helm — try API fallback before giving up.
+		return detectViaKubeAPI(kubeCtx)
 	}
 
 	for _, r := range releases {
