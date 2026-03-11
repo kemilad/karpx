@@ -88,7 +88,16 @@ func (m *NodePoolsModel) Update(msg tea.Msg) (*NodePoolsModel, tea.Cmd) {
 func (m *NodePoolsModel) View() string {
 	var b strings.Builder
 
-	headerText := "  ⚡ karpx" + strings.Repeat(" ", max(0, m.width-36)) + "NodePools / EC2NodeClasses"
+	rightSide := "NodePools / EC2NodeClasses"
+	if m.kubeCtx != "" {
+		clusterName := m.kubeCtx
+		// Extract just the cluster name from EKS ARNs (arn:...:cluster/NAME).
+		if idx := strings.LastIndex(clusterName, "/"); idx >= 0 && strings.Contains(clusterName, ":cluster/") {
+			clusterName = clusterName[idx+1:]
+		}
+		rightSide = clusterName + "  |  NodePools"
+	}
+	headerText := "  ⚡ karpx" + strings.Repeat(" ", max(0, m.width-len(rightSide)-10)) + rightSide
 	header := StyleHeader.Width(max(1, m.width)).Render(headerText)
 	b.WriteString(header + "\n\n")
 
