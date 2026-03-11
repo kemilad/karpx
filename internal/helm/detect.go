@@ -149,12 +149,19 @@ func detectViaKubeAPI(kubeCtx string) (*Info, error) {
 
 // imageTagVersion extracts a semver-like version string from a container image
 // reference. E.g. "public.ecr.aws/karpenter/controller:v1.2.1" → "1.2.1".
+// Returns empty string for non-version tags such as git SHAs or "latest".
 func imageTagVersion(image string) string {
 	idx := strings.LastIndex(image, ":")
 	if idx < 0 {
 		return ""
 	}
-	return strings.TrimPrefix(image[idx+1:], "v")
+	tag := strings.TrimPrefix(image[idx+1:], "v")
+	// Only accept semver-like tags that start with a digit (e.g. "1.2.3").
+	// Reject git SHAs, "latest", and other non-version strings.
+	if tag == "" || tag[0] < '0' || tag[0] > '9' {
+		return ""
+	}
+	return tag
 }
 
 // EnsureHelmAvailable returns an error when helm is not on PATH.
