@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -199,13 +200,19 @@ func fetchNodePools(kubeCtx string) tea.Cmd {
 		}
 		out, err := exec.Command("kubectl", npArgs...).Output()
 		if err != nil {
-			// CRDs may not be installed yet — treat as empty rather than error
-			errStr := string(err.(*exec.ExitError).Stderr)
-			if !strings.Contains(errStr, "no matches for kind") &&
-				!strings.Contains(errStr, "the server doesn't have a resource type") {
-				msg.err = strings.TrimSpace(errStr)
-				return msg
+			// CRDs may not be installed yet — treat as empty rather than error.
+			// Use errors.As to safely extract stderr without risk of a type-assertion panic.
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				errStr := strings.TrimSpace(string(exitErr.Stderr))
+				if !strings.Contains(errStr, "no matches for kind") &&
+					!strings.Contains(errStr, "the server doesn't have a resource type") &&
+					errStr != "" {
+					msg.err = errStr
+					return msg
+				}
 			}
+			// kubectl not found or other non-exit error — leave nodePools empty.
 		} else {
 			msg.nodePools = parseNodePools(out)
 		}

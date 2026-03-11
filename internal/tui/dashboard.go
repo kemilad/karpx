@@ -266,6 +266,9 @@ func (m *DashboardModel) renderHints() string {
 			if sel.UpgradeNeeded || sel.Incompatible {
 				hints = append(hints, KeyActive("u", "upgrade"))
 			}
+		}
+		// Always show nodepools — useful even when detection missed a pre-installed Karpenter.
+		if !sel.Checking {
 			hints = append(hints, Key("n", "nodepools"))
 		}
 	}
@@ -311,7 +314,7 @@ func (m *DashboardModel) navUpgrade() tea.Cmd {
 
 func (m *DashboardModel) navNodePools() tea.Cmd {
 	s := m.selected()
-	if s == nil || !s.Installed {
+	if s == nil || s.Checking {
 		return nil
 	}
 	return func() tea.Msg {
