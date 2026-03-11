@@ -855,11 +855,14 @@
     if (!cluster.karpenter_installed) {
       return `<span class="badge badge-none">Not installed</span>`;
     }
-    const ver = cluster.karpenter_version || '?';
+    const ver = cluster.karpenter_version;
+    const verChip = ver
+      ? `<span class="version-chip">v${esc(ver)}</span>`
+      : `<span class="version-chip" title="Karpenter is installed but the version could not be determined (installed outside Helm)">v?</span>`;
     const upgrade = cluster.upgrade_available
-      ? `<span class="upgrade-hint">▲ ${esc(cluster.latest_compatible)}</span>`
+      ? `<span class="upgrade-hint">▲ v${esc(cluster.latest_compatible)}</span>`
       : '';
-    return `<span class="version-chip">v${esc(ver)}</span>${upgrade}`;
+    return verChip + upgrade;
   }
 
   function compatBadge(cluster) {
@@ -872,6 +875,8 @@
     }
     if (cluster.compatible === true)  return `<span class="badge badge-ok">✓ Compatible</span>`;
     if (cluster.compatible === false) return `<span class="badge badge-err">✗ Incompatible</span>`;
+    // Version unknown — can't determine compatibility.
+    if (!cluster.karpenter_version)   return `<span class="badge badge-warn" title="Version unknown — upgrade recommended">? Unknown</span>`;
     return '—';
   }
 
@@ -880,18 +885,25 @@
     if (!cluster.karpenter_installed) return `<span class="badge badge-none">Not installed</span>`;
     if (cluster.compatible === false) return `<span class="badge badge-err">Upgrade required</span>`;
     if (cluster.upgrade_available)    return `<span class="badge badge-warn">Upgrade available</span>`;
+    if (!cluster.karpenter_version)   return `<span class="badge badge-warn">Version unknown</span>`;
     return `<span class="badge badge-ok">Up to date</span>`;
   }
 
   function actionCell(cluster) {
     if (cluster.karpenter_installed) {
+      const upgradeLabel = cluster.karpenter_version
+        ? `▲ v${esc(cluster.latest_compatible)}`
+        : `▲ Upgrade to v${esc(cluster.latest_compatible)}`;
+      const upgradeTitle = cluster.karpenter_version
+        ? ''
+        : ' title="Version unknown — upgrading to latest compatible"';
       const upgradeBtn = cluster.upgrade_available
-        ? `<button class="btn-upgrade"
+        ? `<button class="btn-upgrade"${upgradeTitle}
               data-action="upgrade"
               data-context="${esc(cluster.context)}"
               data-version="${esc(cluster.latest_compatible)}"
               data-namespace="${esc(cluster.karpenter_namespace || 'karpenter')}"
-              data-release="${esc(cluster.karpenter_release || 'karpenter')}">▲ v${esc(cluster.latest_compatible)}</button>`
+              data-release="${esc(cluster.karpenter_release || 'karpenter')}">${upgradeLabel}</button>`
         : '';
       const nodesBtn = `<button class="btn-nodes"
           data-action="nodes"
@@ -1207,11 +1219,12 @@
     if (!confirm(
       `Zero-downtime upgrade to v${version} on:\n${ctx}\n\n` +
       `This will:\n` +
-      `  1. Apply updated CRDs (helm show crds)\n` +
-      `  2. Scale to 2 replicas for HA during rollover\n` +
-      `  3. Run helm upgrade --reuse-values\n` +
+      `  1. Apply updated CRDs\n` +
+      `  2. Scale to 2 replicas — wait for HA before upgrading\n` +
+      `  3. Upgrade the controller (helm or kubectl image update)\n` +
       `  4. Verify rollout health\n` +
       `  5. Restore original replica count\n\n` +
+      `Workloads continue running throughout. ` +
       `If upgrading across multiple minor versions, each hop runs sequentially.\n\nProceed?`
     )) return;
 

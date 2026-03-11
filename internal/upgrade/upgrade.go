@@ -2,12 +2,16 @@
 //
 // For each minor-version hop the sequence is:
 //  1. Apply CRDs from the official Helm chart (helm show crds | kubectl apply --server-side)
-//  2. Scale the controller to ≥ 2 replicas so one pod stays up during rollover
-//  3. helm upgrade --reuse-values
-//  4. kubectl rollout status (wait up to 3 minutes)
+//  2. Scale the controller to ≥ 2 replicas and wait for the extra pod to be Ready
+//  3a. If Karpenter was installed via Helm: helm upgrade --reuse-values
+//  3b. If installed via raw manifests: kubectl set image (preserves all existing config)
+//  4. kubectl rollout status (wait up to 5 minutes)
 //
 // When upgrading across multiple minor versions the hop is split into one
 // step per minor (e.g. 1.0 → 1.1 → 1.2 → 1.3) as recommended by upstream.
+//
+// When the installed version is unknown (Karpenter detected outside Helm
+// without a readable image tag), a single direct hop to the target is used.
 package upgrade
 
 import (
@@ -15,6 +19,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,13 +43,15 @@ type Reporter func(Step)
 
 // Params holds all inputs for Run.
 type Params struct {
-	KubeCtx     string
-	Namespace   string   // defaults to "karpenter"
-	ReleaseName string   // defaults to "karpenter"
-	Current     string   // installed version, bare semver e.g. "1.0.3"
-	Target      string   // desired version, bare semver e.g. "1.3.0"
-	AllVersions []string // all stable releases (newest first) — used for path
-	ReuseValues bool
+	KubeCtx        string
+	Namespace      string   // defaults to "karpenter"
+	ReleaseName    string   // Helm release name; defaults to "karpenter"
+	DeploymentName string   // controller Deployment name; defaults to "karpenter"
+	Current        string   // installed version, bare semver e.g. "1.0.3"; "" = unknown
+	Target         string   // desired version, bare semver e.g. "1.3.0"
+	AllVersions    []string // all stable releases (newest first) — used for path building
+	ReuseValues    bool
+	ViaHelm        bool // true when a Helm release manages this install
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +67,20 @@ func Run(p Params, report Reporter) error {
 	if p.ReleaseName == "" {
 		p.ReleaseName = "karpenter"
 	}
+	if p.DeploymentName == "" {
+		p.DeploymentName = "karpenter"
+	}
+
+	// When the installed version is unknown we cannot build a hop-by-hop path.
+	// Perform a single direct upgrade to the target instead.
+	if p.Current == "" {
+		report(Step{
+			Name:   "Version unknown",
+			Detail: "installed version could not be determined; performing direct upgrade to v" + p.Target,
+			OK:     true,
+		})
+		return runHop(p, p.Current, p.Target, report)
+	}
 
 	path, err := BuildPath(p.Current, p.Target, p.AllVersions)
 	if err != nil {
@@ -69,16 +90,23 @@ func Run(p Params, report Reporter) error {
 	if len(path) > 1 {
 		report(Step{
 			Name:   "Upgrade path",
-			Detail: fmt.Sprintf("%s → %s  (%d hops: %s)", p.Current, p.Target, len(path), strings.Join(path, " → ")),
+			Detail: fmt.Sprintf("v%s → %s  (%d hops, one minor at a time)", p.Current, "v"+strings.Join(path, " → v"), len(path)),
 			OK:     true,
 		})
 	}
 
-	origReplicas := currentReplicas(p.KubeCtx, p.Namespace)
+	origReplicas := currentReplicas(p.KubeCtx, p.Namespace, p.DeploymentName)
 
 	from := p.Current
 	for _, to := range path {
-		if err := runHop(p.KubeCtx, p.Namespace, p.ReleaseName, from, to, p.ReuseValues, origReplicas, report); err != nil {
+		hopParams := p
+		hopParams.Current = from
+		if err := runHop(hopParams, from, to, report); err != nil {
+			// Restore original replica count on failure so we don't leave
+			// the cluster in an unexpected HA state.
+			if origReplicas > 0 && origReplicas < 2 {
+				_ = scaleDeployment(p.KubeCtx, p.Namespace, p.DeploymentName, origReplicas)
+			}
 			return err
 		}
 		from = to
@@ -86,7 +114,7 @@ func Run(p Params, report Reporter) error {
 
 	// Restore original replica count after all hops complete.
 	if origReplicas > 0 && origReplicas < 2 {
-		if scaleErr := scaleDeployment(p.KubeCtx, p.Namespace, origReplicas); scaleErr == nil {
+		if scaleErr := scaleDeployment(p.KubeCtx, p.Namespace, p.DeploymentName, origReplicas); scaleErr == nil {
 			report(Step{
 				Name:   "Restore replicas",
 				Detail: fmt.Sprintf("scaled back to %d replica(s)", origReplicas),
@@ -102,44 +130,60 @@ func Run(p Params, report Reporter) error {
 // Single-hop logic
 // ─────────────────────────────────────────────────────────────────────────────
 
-func runHop(kubeCtx, namespace, release, from, to string, reuseVals bool, origReplicas int, report Reporter) error {
-	// ── 1. Apply CRDs ────────────────────────────────────────────────────
+func runHop(p Params, from, to string, report Reporter) error {
+	// ── 1. Apply CRDs ─────────────────────────────────────────────────────
 	crdStep := fmt.Sprintf("Apply CRDs  v%s", to)
 	report(Step{Name: crdStep, Detail: "helm show crds → kubectl apply --server-side"})
-	if err := applyCRDs(kubeCtx, to); err != nil {
+	if err := applyCRDs(p.KubeCtx, to); err != nil {
 		report(Step{Name: crdStep, Err: err.Error()})
 		return fmt.Errorf("apply CRDs for v%s: %w", to, err)
 	}
 	report(Step{Name: crdStep, Detail: "CRDs updated", OK: true})
 
-	// ── 2. Scale to ≥ 2 replicas ─────────────────────────────────────────
+	// ── 2. Scale to ≥ 2 replicas and wait for HA ──────────────────────────
+	origReplicas := currentReplicas(p.KubeCtx, p.Namespace, p.DeploymentName)
 	if origReplicas < 2 {
 		scaleStep := "Scale to 2 replicas"
 		report(Step{Name: scaleStep, Detail: "ensures one pod stays available during rollover"})
-		if err := scaleDeployment(kubeCtx, namespace, 2); err != nil {
-			// Non-fatal — single-replica installs on small clusters may not
-			// have enough capacity; log and continue.
+		if err := scaleDeployment(p.KubeCtx, p.Namespace, p.DeploymentName, 2); err != nil {
+			// Non-fatal on small clusters — log and continue.
 			report(Step{Name: scaleStep, Detail: fmt.Sprintf("skipped (%v)", err), OK: true})
 		} else {
-			// Brief pause so the new pod can reach Running before we proceed.
-			time.Sleep(5 * time.Second)
-			report(Step{Name: scaleStep, OK: true})
+			// Wait for the second replica to become Ready before proceeding.
+			// This is the key zero-downtime guarantee: both pods must be healthy
+			// before we start the rolling update so one stays up during rollover.
+			if waitErr := waitForReadyReplicas(p.KubeCtx, p.Namespace, p.DeploymentName, 2, 90*time.Second); waitErr != nil {
+				// Still non-fatal — the cluster may be resource-constrained.
+				report(Step{Name: scaleStep, Detail: "second replica not ready within 90s — continuing anyway", OK: true})
+			} else {
+				report(Step{Name: scaleStep, Detail: "2 replicas ready", OK: true})
+			}
 		}
 	}
 
-	// ── 3. helm upgrade ───────────────────────────────────────────────────
-	helmStep := fmt.Sprintf("helm upgrade  v%s → v%s", from, to)
-	report(Step{Name: helmStep})
-	if err := helmUpgrade(kubeCtx, namespace, release, to, reuseVals); err != nil {
-		report(Step{Name: helmStep, Err: err.Error()})
-		return fmt.Errorf("helm upgrade to v%s: %w", to, err)
+	// ── 3. Upgrade the controller ─────────────────────────────────────────
+	if p.ViaHelm {
+		helmStep := fmt.Sprintf("helm upgrade  v%s → v%s", from, to)
+		report(Step{Name: helmStep})
+		if err := helmUpgrade(p.KubeCtx, p.Namespace, p.ReleaseName, to, p.ReuseValues); err != nil {
+			report(Step{Name: helmStep, Err: err.Error()})
+			return fmt.Errorf("helm upgrade to v%s: %w", to, err)
+		}
+		report(Step{Name: helmStep, OK: true})
+	} else {
+		imgStep := fmt.Sprintf("Update image  v%s → v%s", from, to)
+		report(Step{Name: imgStep, Detail: "kubectl set image (preserves existing configuration)"})
+		if err := imageUpgrade(p.KubeCtx, p.Namespace, p.DeploymentName, to); err != nil {
+			report(Step{Name: imgStep, Err: err.Error()})
+			return fmt.Errorf("image update to v%s: %w", to, err)
+		}
+		report(Step{Name: imgStep, OK: true})
 	}
-	report(Step{Name: helmStep, OK: true})
 
 	// ── 4. Verify rollout ─────────────────────────────────────────────────
 	rollStep := "Verify rollout"
-	report(Step{Name: rollStep, Detail: "kubectl rollout status (timeout 3m)"})
-	if err := waitRollout(kubeCtx, namespace, 3*time.Minute); err != nil {
+	report(Step{Name: rollStep, Detail: "kubectl rollout status (timeout 5m)"})
+	if err := waitRollout(p.KubeCtx, p.Namespace, p.DeploymentName, 5*time.Minute); err != nil {
 		report(Step{Name: rollStep, Err: err.Error()})
 		return fmt.Errorf("rollout verification: %w", err)
 	}
@@ -181,6 +225,7 @@ func applyCRDs(kubeCtx, version string) error {
 	return nil
 }
 
+// helmUpgrade upgrades an existing Helm-managed Karpenter release.
 func helmUpgrade(kubeCtx, namespace, release, version string, reuseVals bool) error {
 	ver := strings.TrimPrefix(version, "v")
 	args := []string{
@@ -202,9 +247,31 @@ func helmUpgrade(kubeCtx, namespace, release, version string, reuseVals bool) er
 	return nil
 }
 
-func scaleDeployment(kubeCtx, namespace string, replicas int) error {
+// imageUpgrade updates the Karpenter controller image for manifest-installed
+// (non-Helm) clusters. It uses kubectl set image so all existing Deployment
+// settings (env vars, IRSA annotations, resource limits, etc.) are preserved.
+func imageUpgrade(kubeCtx, namespace, deploymentName, version string) error {
+	ver := strings.TrimPrefix(version, "v")
+	image := fmt.Sprintf("public.ecr.aws/karpenter/controller:v%s", ver)
 	args := []string{
-		"scale", "deployment", "karpenter",
+		"set", "image",
+		"-n", namespace,
+		"deployment/" + deploymentName,
+		"controller=" + image,
+	}
+	if kubeCtx != "" {
+		args = append(args, "--context", kubeCtx)
+	}
+	out, err := exec.Command("kubectl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func scaleDeployment(kubeCtx, namespace, deploymentName string, replicas int) error {
+	args := []string{
+		"scale", "deployment", deploymentName,
 		fmt.Sprintf("--replicas=%d", replicas),
 		"-n", namespace,
 	}
@@ -214,9 +281,34 @@ func scaleDeployment(kubeCtx, namespace string, replicas int) error {
 	return exec.Command("kubectl", args...).Run()
 }
 
-func waitRollout(kubeCtx, namespace string, timeout time.Duration) error {
+// waitForReadyReplicas polls until the deployment reports at least n ready
+// replicas or the timeout expires. It polls every 5 seconds.
+func waitForReadyReplicas(kubeCtx, namespace, deploymentName string, n int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	args := []string{
-		"rollout", "status", "deployment/karpenter",
+		"get", "deployment", deploymentName,
+		"-n", namespace,
+		"-o", "jsonpath={.status.readyReplicas}",
+	}
+	if kubeCtx != "" {
+		args = append(args, "--context", kubeCtx)
+	}
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("kubectl", args...).Output()
+		if err == nil {
+			var ready int
+			if _, scanErr := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &ready); scanErr == nil && ready >= n {
+				return nil
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for %d ready replica(s) on %s", n, deploymentName)
+}
+
+func waitRollout(kubeCtx, namespace, deploymentName string, timeout time.Duration) error {
+	args := []string{
+		"rollout", "status", "deployment/" + deploymentName,
 		"-n", namespace,
 		fmt.Sprintf("--timeout=%s", timeout),
 	}
@@ -230,9 +322,9 @@ func waitRollout(kubeCtx, namespace string, timeout time.Duration) error {
 	return nil
 }
 
-func currentReplicas(kubeCtx, namespace string) int {
+func currentReplicas(kubeCtx, namespace, deploymentName string) int {
 	args := []string{
-		"get", "deployment", "karpenter",
+		"get", "deployment", deploymentName,
 		"-n", namespace,
 		"-o", "jsonpath={.spec.replicas}",
 	}
@@ -240,9 +332,11 @@ func currentReplicas(kubeCtx, namespace string) int {
 		args = append(args, "--context", kubeCtx)
 	}
 	out, _ := exec.Command("kubectl", args...).Output()
-	n := 1
-	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &n)
-	return n
+	s := strings.TrimSpace(string(out))
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return 1
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

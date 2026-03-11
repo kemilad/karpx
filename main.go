@@ -608,8 +608,35 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 		fmt.Printf("    Run `karpx install` to install it.\n\n")
 		return nil
 	}
+
+	// info.Chart is only set for Helm-managed installs; empty means raw manifests.
+	viaHelm := info.Chart != ""
+
 	installed := strings.TrimPrefix(info.Version, "v")
-	fmt.Printf("  Installed version : v%s\n", installed)
+	if installed == "" {
+		fmt.Printf("  Installed version : unknown (detected outside Helm)\n")
+	} else {
+		fmt.Printf("  Installed version : v%s\n", installed)
+	}
+	if !viaHelm {
+		fmt.Printf("  Install method    : manifests (not Helm) — will use kubectl image update\n")
+	}
+
+	// ── Resolve namespace and deployment name ─────────────────────────────
+	ns := info.Namespace
+	if ns == "" {
+		ns = "karpenter"
+	}
+	releaseName := info.ReleaseName
+	if releaseName == "" {
+		releaseName = "karpenter"
+	}
+	// For API-detected (non-Helm) installs, ReleaseName comes from dep.Name.
+	// Use it as the deployment name; fall back to "karpenter".
+	deploymentName := releaseName
+	if deploymentName == "" {
+		deploymentName = "karpenter"
+	}
 
 	// ── Get Kubernetes version ────────────────────────────────────────────
 	k8sVer, err := kube.GetServerVersion(kubeCtx)
@@ -641,7 +668,7 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 		fmt.Printf("  All compatible    : %s\n", formatVersionList(allVersions, 5))
 	}
 
-	if installed == target {
+	if installed != "" && installed == target {
 		fmt.Printf("\n  ✓  Already on %s — nothing to do.\n\n", targetVer)
 		return nil
 	}
@@ -651,16 +678,27 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 		return fmt.Errorf("version %s incompatible with k8s %s", targetVer, k8sVer)
 	}
 
-	// ── Build and display upgrade path ────────────────────────────────────
-	path, err := karpupgrade.BuildPath(installed, target, allVersions)
-	if err != nil {
-		return err
-	}
-	if len(path) > 1 {
-		fmt.Printf("\n  Upgrade path  : v%s → %s\n", installed, "v"+strings.Join(path, " → v"))
-		fmt.Printf("  (upgrading one minor version at a time for safety)\n")
+	// ── Show upgrade plan ─────────────────────────────────────────────────
+	if installed == "" {
+		// Unknown current version — can't determine hop path; go direct.
+		fmt.Printf("\n  Upgrade       : unknown → v%s (direct, version unknown)\n", target)
 	} else {
-		fmt.Printf("\n  Upgrade       : v%s → v%s\n", installed, target)
+		path, pathErr := karpupgrade.BuildPath(installed, target, allVersions)
+		if pathErr != nil {
+			return pathErr
+		}
+		if len(path) > 1 {
+			fmt.Printf("\n  Upgrade path  : v%s → %s\n", installed, "v"+strings.Join(path, " → v"))
+			fmt.Printf("  (upgrading one minor version at a time for safety)\n")
+		} else {
+			fmt.Printf("\n  Upgrade       : v%s → v%s\n", installed, target)
+		}
+	}
+
+	fmt.Printf("\n  Strategy        : zero-downtime (scale to 2 replicas, rolling update)\n")
+	if !viaHelm {
+		fmt.Printf("  Note            : Karpenter was not installed via Helm;\n")
+		fmt.Printf("                    kubectl image update will be used to preserve your config.\n")
 	}
 
 	if !confirmPrompt("\n  Proceed with zero-downtime upgrade? [y/N] ") {
@@ -677,7 +715,6 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 			return
 		}
 		if !s.OK {
-			// "in progress" notification — just print the name
 			stepNum++
 			if s.Detail != "" {
 				fmt.Printf("  [%d] %s  (%s)\n", stepNum, s.Name, s.Detail)
@@ -694,13 +731,15 @@ func runUpgrade(kubeCtx, targetVer string, reuseVals bool) error {
 	}
 
 	if err := karpupgrade.Run(karpupgrade.Params{
-		KubeCtx:     kubeCtx,
-		Namespace:   info.Namespace,
-		ReleaseName: info.ReleaseName,
-		Current:     installed,
-		Target:      target,
-		AllVersions: allVersions,
-		ReuseValues: reuseVals,
+		KubeCtx:        kubeCtx,
+		Namespace:      ns,
+		ReleaseName:    releaseName,
+		DeploymentName: deploymentName,
+		Current:        installed,
+		Target:         target,
+		AllVersions:    allVersions,
+		ReuseValues:    reuseVals,
+		ViaHelm:        viaHelm,
 	}, reporter); err != nil {
 		fmt.Printf("\n  ✗ Upgrade failed: %v\n\n", err)
 		return err

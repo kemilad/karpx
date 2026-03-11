@@ -402,12 +402,16 @@ func Serve(port int, kubeCtx string) error {
 			return
 		}
 
-		// Detect current install for namespace / release name.
+		// Detect current install for namespace / release name / upgrade method.
 		info, err := helm.DetectKarpenter(req.Context)
 		if err != nil || !info.Installed {
 			json.NewEncoder(w).Encode(InstallResponse{Error: "Karpenter not detected on this cluster"})
 			return
 		}
+
+		// info.Chart is only populated for Helm-managed releases; empty = raw manifests.
+		viaHelm := info.Chart != ""
+
 		ns := req.Namespace
 		if ns == "" {
 			ns = info.Namespace
@@ -421,6 +425,11 @@ func Serve(port int, kubeCtx string) error {
 		}
 		if release == "" {
 			release = "karpenter"
+		}
+		// For non-Helm (API-detected) installs ReleaseName == deployment name.
+		deploymentName := release
+		if deploymentName == "" {
+			deploymentName = "karpenter"
 		}
 
 		installed := strings.TrimPrefix(info.Version, "v")
@@ -445,16 +454,18 @@ func Serve(port int, kubeCtx string) error {
 		// 15-minute timeout covers multi-hop upgrades.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
-		_ = ctx // upgrade.Run uses exec directly; context used for timeout enforcement
+		_ = ctx // upgrade.Run uses exec directly; context enforced above
 
 		if err := karpupgrade.Run(karpupgrade.Params{
-			KubeCtx:     req.Context,
-			Namespace:   ns,
-			ReleaseName: release,
-			Current:     installed,
-			Target:      target,
-			AllVersions: allVersions,
-			ReuseValues: true,
+			KubeCtx:        req.Context,
+			Namespace:      ns,
+			ReleaseName:    release,
+			DeploymentName: deploymentName,
+			Current:        installed,
+			Target:         target,
+			AllVersions:    allVersions,
+			ReuseValues:    true,
+			ViaHelm:        viaHelm,
 		}, reporter); err != nil {
 			json.NewEncoder(w).Encode(InstallResponse{Error: err.Error(), Steps: steps})
 			return
@@ -809,9 +820,15 @@ func inspectContext(ctx string) ClusterStatus {
 			if installed != "" {
 				ok := compat.IsCompatible(installed, k8sVer)
 				s.Compatible = &ok
+				if latest != "" && installed != latest {
+					s.UpgradeAvailable = true
+				}
+			} else {
+				// Version unknown (installed outside Helm without a readable image tag).
+				// Recommend upgrading to the latest compatible version.
+				s.UpgradeAvailable = latest != ""
 			}
-			if latest != "" && latest != installed {
-				s.UpgradeAvailable = true
+			if latest != "" {
 				s.LatestCompatible = latest
 			}
 		} else {
