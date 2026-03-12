@@ -125,7 +125,13 @@ func detectViaKubeAPI(kubeCtx string) (*Info, error) {
 	deps, err := cs.AppsV1().Deployments("").List(context.TODO(), metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/name=karpenter",
 	})
+	// Older Karpenter releases (pre-v0.20) used "app=karpenter" instead.
 	if err != nil || len(deps.Items) == 0 {
+		deps, _ = cs.AppsV1().Deployments("").List(context.TODO(), metav1.ListOptions{
+			LabelSelector: "app=karpenter",
+		})
+	}
+	if len(deps.Items) == 0 {
 		// CRDs present but no standard deployment found; still installed.
 		return &Info{Installed: true}, nil
 	}
@@ -136,6 +142,15 @@ func detectViaKubeAPI(kubeCtx string) (*Info, error) {
 		if v := imageTagVersion(c.Image); v != "" {
 			version = v
 			break
+		}
+	}
+	// Try init containers too (some Karpenter builds use them for version).
+	if version == "" {
+		for _, c := range dep.Spec.Template.Spec.InitContainers {
+			if v := imageTagVersion(c.Image); v != "" {
+				version = v
+				break
+			}
 		}
 	}
 
