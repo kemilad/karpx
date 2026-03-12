@@ -26,6 +26,7 @@ type NodePoolEntry struct {
 
 type NodeClassEntry struct {
 	Name        string
+	Role        string // EC2NodeClass spec.role or AWSNodeTemplate spec.instanceProfile
 	Ready       bool
 	NotReadyMsg string
 }
@@ -168,20 +169,29 @@ func (m *NodePoolsModel) View() string {
 		b.WriteString(StyleMuted.Render("  No EC2NodeClasses found.") + "\n")
 	} else {
 		colName := 24
+		colRole := 36
 
-		hdr := fmt.Sprintf("  %-*s  %s",
+		hdr := fmt.Sprintf("  %-*s  %-*s  %s",
 			colName, StyleTableHeader.Render("NAME"),
+			colRole, StyleTableHeader.Render("NODE ROLE"),
 			         StyleTableHeader.Render("READY"),
 		)
 		b.WriteString(hdr + "\n")
-		b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", max(0, min(m.width-4, 40)))) + "\n")
+		b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", max(0, min(m.width-4, 70)))) + "\n")
 
 		for _, nc := range m.nodeClasses {
 			ready := StyleSuccess.Render("✓")
 			if !nc.Ready {
 				ready = StyleDanger.Render("✗")
 			}
-			row := fmt.Sprintf("  %-*s  %s", colName, nc.Name, ready)
+			role := nc.Role
+			if role == "" {
+				role = "—"
+			}
+			if len(role) > colRole {
+				role = role[:colRole-1] + "…"
+			}
+			row := fmt.Sprintf("  %-*s  %-*s  %s", colName, nc.Name, colRole, role, ready)
 			b.WriteString(StyleRowNormal.Render(row) + "\n")
 			if !nc.Ready && nc.NotReadyMsg != "" {
 				b.WriteString(StyleMuted.Render("    └ "+nc.NotReadyMsg) + "\n")
@@ -202,38 +212,58 @@ func fetchNodePools(kubeCtx string) tea.Cmd {
 	return func() tea.Msg {
 		msg := nodePoolsLoadedMsg{}
 
-		// ── NodePools ──────────────────────────────────────────────────────
-		npArgs := []string{"get", "nodepools", "-o", "json"}
+		// ── NodePools (v1beta1, Karpenter ≥ v0.31) ────────────────────────
+		npArgs := []string{"get", "nodepools.karpenter.sh", "-o", "json"}
 		if kubeCtx != "" {
 			npArgs = append(npArgs, "--context", kubeCtx)
 		}
 		out, err := exec.Command("kubectl", npArgs...).Output()
-		if err != nil {
-			// CRDs may not be installed yet — treat as empty rather than error.
-			// Use errors.As to safely extract stderr without risk of a type-assertion panic.
+		if err == nil {
+			msg.nodePools = parseNodePools(out)
+		} else {
+			// Propagate hard errors (not "CRD not found").
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
 				errStr := strings.TrimSpace(string(exitErr.Stderr))
-				if !strings.Contains(errStr, "no matches for kind") &&
-					!strings.Contains(errStr, "the server doesn't have a resource type") &&
-					errStr != "" {
+				if errStr != "" &&
+					!strings.Contains(errStr, "no matches for kind") &&
+					!strings.Contains(errStr, "the server doesn't have a resource type") {
 					msg.err = errStr
 					return msg
 				}
 			}
-			// kubectl not found or other non-exit error — leave nodePools empty.
-		} else {
-			msg.nodePools = parseNodePools(out)
 		}
 
-		// ── EC2NodeClasses ─────────────────────────────────────────────────
-		ncArgs := []string{"get", "ec2nodeclasses", "-o", "json"}
+		// ── Provisioners (v1alpha5, Karpenter < v0.31) — fallback ─────────
+		// Try when no NodePools were found (older cluster format).
+		if len(msg.nodePools) == 0 {
+			provArgs := []string{"get", "provisioners.karpenter.sh", "-o", "json"}
+			if kubeCtx != "" {
+				provArgs = append(provArgs, "--context", kubeCtx)
+			}
+			if out2, err2 := exec.Command("kubectl", provArgs...).Output(); err2 == nil {
+				msg.nodePools = parseProvisioners(out2)
+			}
+		}
+
+		// ── EC2NodeClasses (v1beta1, Karpenter ≥ v0.31) ───────────────────
+		ncArgs := []string{"get", "ec2nodeclasses.karpenter.k8s.aws", "-o", "json"}
 		if kubeCtx != "" {
 			ncArgs = append(ncArgs, "--context", kubeCtx)
 		}
-		out2, err2 := exec.Command("kubectl", ncArgs...).Output()
-		if err2 == nil {
-			msg.nodeClasses = parseNodeClasses(out2)
+		if out3, err3 := exec.Command("kubectl", ncArgs...).Output(); err3 == nil {
+			msg.nodeClasses = parseNodeClasses(out3)
+		}
+
+		// ── AWSNodeTemplates (v1alpha1, Karpenter < v0.31) — fallback ─────
+		if len(msg.nodeClasses) == 0 {
+			antArgs := []string{"get", "awsnodetemplates.karpenter.k8s.aws", "-o", "json"}
+			if kubeCtx != "" {
+				antArgs = append(antArgs, "--context", kubeCtx)
+			}
+			if out4, err4 := exec.Command("kubectl", antArgs...).Output(); err4 == nil {
+				msg.nodeClasses = parseAWSNodeTemplates(out4)
+			}
 		}
 
 		return msg
@@ -248,13 +278,37 @@ type k8sList struct {
 	Items []json.RawMessage `json:"items"`
 }
 
+// k8sMeta covers NodePool (v1beta1) and EC2NodeClass (v1beta1).
 type k8sMeta struct {
 	Metadata struct {
 		Name        string            `json:"name"`
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
-		Limits map[string]string `json:"limits"`
+		Limits         map[string]string `json:"limits"`          // NodePool v1beta1
+		Role           string            `json:"role"`            // EC2NodeClass v1beta1
+		InstanceProfile string           `json:"instanceProfile"` // AWSNodeTemplate v1alpha1
+	} `json:"spec"`
+	Status struct {
+		Conditions []struct {
+			Type    string `json:"type"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Reason  string `json:"reason"`
+		} `json:"conditions"`
+	} `json:"status"`
+}
+
+// provisionerMeta covers Provisioner (v1alpha5) where limits are nested.
+type provisionerMeta struct {
+	Metadata struct {
+		Name        string            `json:"name"`
+		Annotations map[string]string `json:"annotations"`
+	} `json:"metadata"`
+	Spec struct {
+		Limits struct {
+			Resources map[string]string `json:"resources"`
+		} `json:"limits"`
 	} `json:"spec"`
 	Status struct {
 		Conditions []struct {
@@ -319,7 +373,83 @@ func parseNodeClasses(data []byte) []NodeClassEntry {
 			continue
 		}
 		ready, notReadyMsg := readyStatus(m)
-		out = append(out, NodeClassEntry{Name: m.Metadata.Name, Ready: ready, NotReadyMsg: notReadyMsg})
+		role := m.Spec.Role
+		if role == "" {
+			role = m.Spec.InstanceProfile
+		}
+		out = append(out, NodeClassEntry{
+			Name:        m.Metadata.Name,
+			Role:        role,
+			Ready:       ready,
+			NotReadyMsg: notReadyMsg,
+		})
+	}
+	return out
+}
+
+// parseProvisioners handles the old Karpenter v1alpha5 Provisioner resource.
+func parseProvisioners(data []byte) []NodePoolEntry {
+	var list k8sList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil
+	}
+	var out []NodePoolEntry
+	for _, raw := range list.Items {
+		var m provisionerMeta
+		if err := json.Unmarshal(raw, &m); err != nil {
+			continue
+		}
+		// Provisioner conditions use "Ready" same as NodePool.
+		ready := false
+		notReadyMsg := ""
+		for _, c := range m.Status.Conditions {
+			if c.Type == "Ready" {
+				ready = c.Status == "True"
+				if !ready {
+					notReadyMsg = c.Message
+					if notReadyMsg == "" {
+						notReadyMsg = c.Reason
+					}
+				}
+				break
+			}
+		}
+		e := NodePoolEntry{
+			Name:        m.Metadata.Name,
+			Mode:        m.Metadata.Annotations["karpx.io/generated-mode"],
+			Ready:       ready,
+			NotReadyMsg: notReadyMsg,
+			CPULim:      m.Spec.Limits.Resources["cpu"],
+			MemLim:      m.Spec.Limits.Resources["memory"],
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// parseAWSNodeTemplates handles the old Karpenter v1alpha1 AWSNodeTemplate resource.
+func parseAWSNodeTemplates(data []byte) []NodeClassEntry {
+	var list k8sList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil
+	}
+	var out []NodeClassEntry
+	for _, raw := range list.Items {
+		var m k8sMeta
+		if err := json.Unmarshal(raw, &m); err != nil {
+			continue
+		}
+		ready, notReadyMsg := readyStatus(m)
+		role := m.Spec.InstanceProfile
+		if role == "" {
+			role = m.Spec.Role
+		}
+		out = append(out, NodeClassEntry{
+			Name:        m.Metadata.Name,
+			Role:        role,
+			Ready:       ready,
+			NotReadyMsg: notReadyMsg,
+		})
 	}
 	return out
 }

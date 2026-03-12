@@ -487,14 +487,31 @@ func Serve(port int, kubeCtx string) error {
 			Message string `json:"message"`
 			Reason  string `json:"reason"`
 		}
+		// k8sMeta covers NodePool (v1beta1) and EC2NodeClass (v1beta1).
 		type k8sMeta struct {
 			Metadata struct {
 				Name        string            `json:"name"`
 				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
 			Spec struct {
-				Limits map[string]string `json:"limits"`
-				Role   string            `json:"role"`
+				Limits          map[string]string `json:"limits"`          // NodePool v1beta1
+				Role            string            `json:"role"`            // EC2NodeClass v1beta1
+				InstanceProfile string            `json:"instanceProfile"` // AWSNodeTemplate v1alpha1
+			} `json:"spec"`
+			Status struct {
+				Conditions []k8sCond `json:"conditions"`
+			} `json:"status"`
+		}
+		// provisionerMeta covers Provisioner (v1alpha5) with nested limits.
+		type provisionerMeta struct {
+			Metadata struct {
+				Name        string            `json:"name"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+			Spec struct {
+				Limits struct {
+					Resources map[string]string `json:"resources"`
+				} `json:"limits"`
 			} `json:"spec"`
 			Status struct {
 				Conditions []k8sCond `json:"conditions"`
@@ -503,8 +520,8 @@ func Serve(port int, kubeCtx string) error {
 		type k8sList struct {
 			Items []json.RawMessage `json:"items"`
 		}
-		readyStatus := func(m k8sMeta) (bool, string) {
-			for _, c := range m.Status.Conditions {
+		readyStatus := func(conds []k8sCond) (bool, string) {
+			for _, c := range conds {
 				if c.Type == "Ready" {
 					if c.Status == "True" {
 						return true, ""
@@ -518,14 +535,18 @@ func Serve(port int, kubeCtx string) error {
 			}
 			return false, ""
 		}
+		isCRDMissing := func(errStr string) bool {
+			return strings.Contains(errStr, "no matches for kind") ||
+				strings.Contains(errStr, "the server doesn't have a resource type")
+		}
 
 		resp := NodePoolListResponse{
 			NodePools:   []NodePoolDetail{},
 			NodeClasses: []NodeClassDetail{},
 		}
 
-		// NodePools
-		npArgs := []string{"get", "nodepools", "-o", "json"}
+		// ── NodePools (v1beta1, Karpenter ≥ v0.31) ────────────────────────
+		npArgs := []string{"get", "nodepools.karpenter.sh", "-o", "json"}
 		if kubeCtxParam != "" {
 			npArgs = append(npArgs, "--context", kubeCtxParam)
 		}
@@ -534,10 +555,7 @@ func Serve(port int, kubeCtx string) error {
 			var exitErr *exec.ExitError
 			if errors.As(npErr, &exitErr) {
 				errStr := strings.TrimSpace(string(exitErr.Stderr))
-				// Treat "CRDs not installed" as an empty list, not an error.
-				if errStr != "" &&
-					!strings.Contains(errStr, "no matches for kind") &&
-					!strings.Contains(errStr, "the server doesn't have a resource type") {
+				if errStr != "" && !isCRDMissing(errStr) {
 					resp.Error = errStr
 				}
 			}
@@ -549,7 +567,7 @@ func Serve(port int, kubeCtx string) error {
 					if json.Unmarshal(raw, &m) != nil {
 						continue
 					}
-					ready, msg := readyStatus(m)
+					ready, msg := readyStatus(m.Status.Conditions)
 					resp.NodePools = append(resp.NodePools, NodePoolDetail{
 						Name:        m.Metadata.Name,
 						Mode:        m.Metadata.Annotations["karpx.io/generated-mode"],
@@ -562,8 +580,36 @@ func Serve(port int, kubeCtx string) error {
 			}
 		}
 
-		// EC2NodeClasses
-		ncArgs := []string{"get", "ec2nodeclasses", "-o", "json"}
+		// ── Provisioners (v1alpha5, Karpenter < v0.31) — fallback ─────────
+		if len(resp.NodePools) == 0 && resp.Error == "" {
+			provArgs := []string{"get", "provisioners.karpenter.sh", "-o", "json"}
+			if kubeCtxParam != "" {
+				provArgs = append(provArgs, "--context", kubeCtxParam)
+			}
+			if provOut, provErr := exec.CommandContext(r.Context(), "kubectl", provArgs...).Output(); provErr == nil {
+				var list k8sList
+				if json.Unmarshal(provOut, &list) == nil {
+					for _, raw := range list.Items {
+						var m provisionerMeta
+						if json.Unmarshal(raw, &m) != nil {
+							continue
+						}
+						ready, msg := readyStatus(m.Status.Conditions)
+						resp.NodePools = append(resp.NodePools, NodePoolDetail{
+							Name:        m.Metadata.Name,
+							Mode:        m.Metadata.Annotations["karpx.io/generated-mode"],
+							Ready:       ready,
+							NotReadyMsg: msg,
+							CPULim:      m.Spec.Limits.Resources["cpu"],
+							MemLim:      m.Spec.Limits.Resources["memory"],
+						})
+					}
+				}
+			}
+		}
+
+		// ── EC2NodeClasses (v1beta1, Karpenter ≥ v0.31) ───────────────────
+		ncArgs := []string{"get", "ec2nodeclasses.karpenter.k8s.aws", "-o", "json"}
 		if kubeCtxParam != "" {
 			ncArgs = append(ncArgs, "--context", kubeCtxParam)
 		}
@@ -576,13 +622,47 @@ func Serve(port int, kubeCtx string) error {
 					if json.Unmarshal(raw, &m) != nil {
 						continue
 					}
-					ready, msg := readyStatus(m)
+					ready, msg := readyStatus(m.Status.Conditions)
+					role := m.Spec.Role
+					if role == "" {
+						role = m.Spec.InstanceProfile
+					}
 					resp.NodeClasses = append(resp.NodeClasses, NodeClassDetail{
 						Name:        m.Metadata.Name,
-						Role:        m.Spec.Role,
+						Role:        role,
 						Ready:       ready,
 						NotReadyMsg: msg,
 					})
+				}
+			}
+		}
+
+		// ── AWSNodeTemplates (v1alpha1, Karpenter < v0.31) — fallback ─────
+		if len(resp.NodeClasses) == 0 {
+			antArgs := []string{"get", "awsnodetemplates.karpenter.k8s.aws", "-o", "json"}
+			if kubeCtxParam != "" {
+				antArgs = append(antArgs, "--context", kubeCtxParam)
+			}
+			if antOut, antErr := exec.CommandContext(r.Context(), "kubectl", antArgs...).Output(); antErr == nil {
+				var list k8sList
+				if json.Unmarshal(antOut, &list) == nil {
+					for _, raw := range list.Items {
+						var m k8sMeta
+						if json.Unmarshal(raw, &m) != nil {
+							continue
+						}
+						ready, msg := readyStatus(m.Status.Conditions)
+						role := m.Spec.InstanceProfile
+						if role == "" {
+							role = m.Spec.Role
+						}
+						resp.NodeClasses = append(resp.NodeClasses, NodeClassDetail{
+							Name:        m.Metadata.Name,
+							Role:        role,
+							Ready:       ready,
+							NotReadyMsg: msg,
+						})
+					}
 				}
 			}
 		}
