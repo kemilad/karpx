@@ -1444,9 +1444,11 @@
         }
 
         // Also restore last-used role from localStorage if field still empty
+        // Key is scoped to the cluster so roles don't bleed across clusters.
         const roleField = document.getElementById('field-role-arn');
         if (roleField && !roleField.value) {
-          roleField.value = localStorage.getItem('karpx-node-role') || '';
+          const storageKey = `karpx-node-role-${clusterName || ctx}`;
+          roleField.value = localStorage.getItem(storageKey) || '';
         }
       })
       .catch(() => {
@@ -1469,8 +1471,8 @@
     const clusterName = document.getElementById('field-cluster-name')?.value.trim() || '';
     const roleARN     = document.getElementById('field-role-arn')?.value.trim()     || '';
 
-    // Persist role for next time
-    if (roleARN) localStorage.setItem('karpx-node-role', roleARN);
+    // Persist role for next time, scoped to this cluster
+    if (roleARN) localStorage.setItem(`karpx-node-role-${clusterName || _nodesCtx}`, roleARN);
 
     const genBtn = document.getElementById('btn-generate');
     genBtn.disabled = true;
