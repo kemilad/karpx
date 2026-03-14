@@ -596,6 +596,57 @@
     @media (max-width: 640px) {
       .hide-sm { display: none; }
     }
+  
+    /* ── Add-ons button ── */
+    .btn-addons {
+      background: rgba(6,182,212,0.12);
+      border: 1px solid var(--cyan);
+      color: var(--cyan);
+      padding: 0.35rem 0.7rem;
+      border-radius: 5px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      font-family: var(--mono);
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .btn-addons:hover { background: rgba(6,182,212,0.22); }
+
+    /* ── Add-ons modal table ── */
+    .addons-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .addons-table th {
+      text-align: left; padding: 0.4rem 0.6rem;
+      color: var(--cyan); font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .addons-table td { padding: 0.55rem 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+    .addons-table tr:last-child td { border-bottom: none; }
+    .addon-installed  { color: var(--green); font-weight: 600; font-size: 0.78rem; }
+    .addon-missing    { color: var(--muted); font-size: 0.78rem; }
+    .addon-error      { color: var(--red);   font-size: 0.78rem; }
+    .addon-cat        { color: var(--violet-lt); font-size: 0.72rem; }
+    .addon-desc       { color: var(--text-dim); font-size: 0.78rem; }
+    .btn-addon-install {
+      background: rgba(16,185,129,0.12); border: 1px solid var(--green);
+      color: var(--green); padding: 0.28rem 0.65rem; border-radius: 4px;
+      font-size: 0.72rem; cursor: pointer; font-family: var(--mono); white-space: nowrap;
+    }
+    .btn-addon-install:hover { background: rgba(16,185,129,0.22); }
+    .btn-addon-install:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-addon-uninstall {
+      background: rgba(239,68,68,0.1); border: 1px solid var(--red);
+      color: var(--red); padding: 0.28rem 0.65rem; border-radius: 4px;
+      font-size: 0.72rem; cursor: pointer; font-family: var(--mono); white-space: nowrap;
+    }
+    .btn-addon-uninstall:hover { background: rgba(239,68,68,0.2); }
+    .btn-addon-uninstall:disabled { opacity: 0.5; cursor: not-allowed; }
+    .addons-log {
+      display: none; margin-top: 1rem;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.8rem 1rem; font-size: 0.75rem; font-family: var(--mono);
+      max-height: 220px; overflow-y: auto; white-space: pre-wrap; line-height: 1.7;
+    }
   </style>
 </head>
 <body>
@@ -824,6 +875,21 @@
   </div>
 </div>
 
+<!-- ── Add-ons Modal ─────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="addons-modal">
+  <div class="modal" style="max-width:720px">
+    <button class="modal-close" onclick="closeAddonsModal()">✕</button>
+    <div class="modal-title">⊕ Add-ons</div>
+    <p id="addons-modal-ctx" style="color:var(--text-dim);font-size:0.8rem;margin:0 0 1rem"></p>
+
+    <div id="addons-table-wrap">
+      <span style="color:var(--muted);font-size:0.78rem"><span class="spinner" style="width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:0.4rem"></span>Checking add-on status…</span>
+    </div>
+
+    <div class="addons-log" id="addons-log"></div>
+  </div>
+</div>
+
 <footer>
   karpx &mdash; Karpenter managed from your terminal &nbsp;|&nbsp;
   <a href="https://github.com/kemilad/karpx" target="_blank" rel="noopener">GitHub</a>
@@ -915,25 +981,37 @@
           data-context="${esc(cluster.context)}"
           data-namespace="${esc(cluster.karpenter_namespace || 'karpenter')}"
           data-release="${esc(cluster.karpenter_release || 'karpenter')}">Uninstall</button>`;
-      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">${upgradeBtn}${nodesBtn}${uninstallBtn}</span>`;
+      const addonsBtn = `<button class="btn-addons"
+          data-action="addons"
+          data-context="${esc(cluster.context)}">⊕ Add-ons</button>`;
+      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">${upgradeBtn}${nodesBtn}${uninstallBtn}${addonsBtn}</span>`;
     }
+    const addonsBtn2 = `<button class="btn-addons"
+        data-action="addons"
+        data-context="${esc(cluster.context)}">⊕ Add-ons</button>`;
     if (cluster.provider === 'aws') {
-      return `<button class="btn-install"
+      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">
+        <button class="btn-install"
                 data-action="install-modal"
                 data-context="${esc(cluster.context)}"
                 data-k8s-ver="${esc(cluster.k8s_version || '')}"
-                data-recommended="${esc(cluster.latest_compatible || '')}">⚡ Install…</button>`;
+                data-recommended="${esc(cluster.latest_compatible || '')}">⚡ Install…</button>
+        ${addonsBtn2}</span>`;
     }
     if ((cluster.provider === 'azure' || cluster.provider === 'gcp') && cluster.docs_url) {
-      return `<a class="btn-install" href="${esc(cluster.docs_url)}"
-               target="_blank" rel="noopener">Setup Guide →</a>`;
+      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">
+        <a class="btn-install" href="${esc(cluster.docs_url)}"
+           target="_blank" rel="noopener">Setup Guide →</a>
+        ${addonsBtn2}</span>`;
     }
     if (!cluster.error) {
-      return `<button class="btn-install"
+      return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">
+        <button class="btn-install"
                 data-action="install-modal"
                 data-context="${esc(cluster.context)}"
                 data-k8s-ver="${esc(cluster.k8s_version || '')}"
-                data-recommended="">⚡ Install…</button>`;
+                data-recommended="">⚡ Install…</button>
+        ${addonsBtn2}</span>`;
     }
     return '<span style="color:var(--muted);font-size:0.75rem">—</span>';
   }
@@ -1006,6 +1084,9 @@
           break;
         case 'nodes':
           openNodesModal(btn.dataset.context, btn.dataset.provider, btn.dataset.clusterName);
+          break;
+        case 'addons':
+          openAddonsModal(btn.dataset.context);
           break;
       }
     });
@@ -1640,6 +1721,146 @@
 
   // Initial load
   refresh();
+
+  // ── Add-ons Modal ─────────────────────────────────────────────────────────
+  let _addonsCtx = '';
+
+  async function openAddonsModal(ctx) {
+    _addonsCtx = ctx;
+    const clusterLabel = ctx.includes(':cluster/') ? ctx.split(':cluster/').pop() : ctx;
+    document.getElementById('addons-modal-ctx').textContent = 'Cluster: ' + clusterLabel;
+    document.getElementById('addons-log').style.display = 'none';
+    document.getElementById('addons-log').textContent = '';
+    document.getElementById('addons-table-wrap').innerHTML =
+      '<span style="color:var(--muted);font-size:0.78rem"><span class="spinner" style="width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:0.4rem"></span>Checking add-on status…</span>';
+    document.getElementById('addons-modal').classList.add('open');
+    await loadAddons(ctx);
+  }
+
+  function closeAddonsModal() {
+    document.getElementById('addons-modal').classList.remove('open');
+  }
+
+  document.getElementById('addons-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('addons-modal')) closeAddonsModal();
+  });
+
+  async function loadAddons(ctx) {
+    try {
+      const resp = await fetch(`/api/addons?context=${encodeURIComponent(ctx)}`);
+      const data = await resp.json();
+      renderAddonsTable(data);
+    } catch (err) {
+      document.getElementById('addons-table-wrap').innerHTML =
+        `<span style="color:var(--red);font-size:0.78rem">✗ Could not fetch add-on status: ${esc(err.message)}</span>`;
+    }
+  }
+
+  function renderAddonsTable(addons) {
+    if (!addons || addons.length === 0) {
+      document.getElementById('addons-table-wrap').innerHTML =
+        '<span style="color:var(--muted);font-size:0.78rem">No add-ons available</span>';
+      return;
+    }
+    const rows = addons.map(a => {
+      let statusHtml, actionHtml;
+      if (a.status === 'installed') {
+        const ver = a.version ? ` <span style="color:var(--muted);font-size:0.7rem">(${esc(a.version)})</span>` : '';
+        statusHtml = `<span class="addon-installed">● installed${ver}</span>`;
+        actionHtml = `<button class="btn-addon-uninstall" onclick="doAddonUninstall('${esc(a.id)}', this)">Uninstall</button>`;
+      } else if (a.status === 'error') {
+        statusHtml = `<span class="addon-error" title="${esc(a.error || '')}">! error</span>`;
+        actionHtml = `<button class="btn-addon-install" onclick="doAddonInstall('${esc(a.id)}', this)">Install</button>`;
+      } else {
+        statusHtml = `<span class="addon-missing">○ not installed</span>`;
+        actionHtml = `<button class="btn-addon-install" onclick="doAddonInstall('${esc(a.id)}', this)">Install</button>`;
+      }
+      return `<tr>
+        <td><span class="addon-cat">${esc(a.category)}</span></td>
+        <td><strong style="font-size:0.82rem">${esc(a.name)}</strong></td>
+        <td><span class="addon-desc">${esc(a.description)}</span></td>
+        <td>${statusHtml}</td>
+        <td>${actionHtml}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('addons-table-wrap').innerHTML = `
+      <table class="addons-table">
+        <thead><tr>
+          <th>Category</th><th>Name</th><th>Description</th><th>Status</th><th>Action</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function doAddonInstall(addonId, btn) {
+    if (!confirm(`Install ${addonId} on cluster "${_addonsCtx}"?\n\nThis will add the Helm repo and run helm upgrade --install. It may take several minutes.`)) return;
+
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:middle"></span> Installing…';
+
+    const log = document.getElementById('addons-log');
+    log.textContent = '';
+    log.style.display = 'block';
+
+    try {
+      const resp = await fetch('/api/addons/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _addonsCtx, addon_id: addonId }),
+      });
+      const result = await resp.json();
+      log.textContent = (result.steps || []).join('\n') || result.error || '';
+      if (result.success) {
+        showToast(`✓ ${addonId} installed successfully`, 'success', 6000);
+        await loadAddons(_addonsCtx);
+      } else {
+        showToast(`Install failed: ${result.error || 'unknown error'}`, 'error', 10000);
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    } catch (err) {
+      log.textContent = '✗ ' + err.message;
+      showToast(`Error: ${err.message}`, 'error', 8000);
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  async function doAddonUninstall(addonId, btn) {
+    if (!confirm(`Uninstall ${addonId} from cluster "${_addonsCtx}"?`)) return;
+
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:middle"></span> Uninstalling…';
+
+    const log = document.getElementById('addons-log');
+    log.textContent = '';
+    log.style.display = 'block';
+
+    try {
+      const resp = await fetch('/api/addons/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _addonsCtx, addon_id: addonId }),
+      });
+      const result = await resp.json();
+      log.textContent = (result.steps || []).join('\n') || result.error || '';
+      if (result.success) {
+        showToast(`✓ ${addonId} uninstalled`, 'success', 5000);
+        await loadAddons(_addonsCtx);
+      } else {
+        showToast(`Uninstall failed: ${result.error || 'unknown error'}`, 'error', 10000);
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    } catch (err) {
+      log.textContent = '✗ ' + err.message;
+      showToast(`Error: ${err.message}`, 'error', 8000);
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
 </script>
 </body>
 </html>
