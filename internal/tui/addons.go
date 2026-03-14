@@ -113,7 +113,7 @@ func (m *AddonsModel) View() string {
 		         StyleTableHeader.Render("STATUS"),
 	)
 	b.WriteString(hdr + "\n")
-	b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", min(m.width-4, 116))) + "\n")
+	b.WriteString(StyleMuted.Render("  "+strings.Repeat("─", max(0, min(m.width-4, 116)))) + "\n")
 
 	for i, e := range m.entries {
 		b.WriteString(m.renderRow(e, i == m.cursor, colName, colCat, colDesc, colVer) + "\n")
