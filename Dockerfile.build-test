@@ -1,0 +1,44 @@
+# ── Build-test Dockerfile ─────────────────────────────────────────────────────
+# Use this to validate the Go build locally with Podman (no Go install required).
+#
+#   podman build -f Dockerfile.build-test -t karpx-build-test .
+#   podman run --rm karpx-build-test version
+#
+# The image mirrors what GoReleaser does in CI:
+#   1. go mod tidy   (generates go.sum on the fly — not stored in git)
+#   2. go build      (CGO_ENABLED=0, trimpath, inject version)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: build ───────────────────────────────────────────────────────────
+FROM golang:1.22-alpine AS builder
+
+# ca-certificates needed for go mod download (TLS)
+RUN apk add --no-cache ca-certificates git
+
+WORKDIR /src
+
+# Copy full source first — go mod tidy needs to scan imports to resolve go.sum.
+# (go.sum is not committed; goreleaser generates it via `go mod tidy` as a pre-hook.)
+COPY . .
+
+# Resolve + lock all dependencies (creates go.sum on the fly).
+RUN go mod tidy
+
+# Build for the current platform (linux/amd64 or linux/arm64).
+# CGO_ENABLED=0 produces a fully static binary — same flags as goreleaser.
+RUN CGO_ENABLED=0 go build \
+      -trimpath \
+      -ldflags="-s -w -X main.version=v0.1.30-test" \
+      -o /out/karpx \
+      .
+
+# ── Stage 2: smoke-test ───────────────────────────────────────────────────────
+FROM alpine:3.19 AS smoke
+
+COPY --from=builder /out/karpx /usr/local/bin/karpx
+
+# Verify the binary is executable and prints a version string.
+RUN karpx version
+
+ENTRYPOINT ["/usr/local/bin/karpx"]
+CMD ["version"]

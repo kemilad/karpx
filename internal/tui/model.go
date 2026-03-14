@@ -20,14 +20,16 @@ type view int
 const (
 	viewDashboard view = iota
 	viewNodePools
+	viewAddons
 )
 
 // Model is the root BubbleTea model; it owns navigation between views.
 type Model struct {
-	cfg       Config
-	current   view
-	dashboard *DashboardModel
-	nodepools *NodePoolsModel
+	cfg        Config
+	current    view
+	dashboard  *DashboardModel
+	nodepools  *NodePoolsModel
+	addonsView *AddonsModel
 }
 
 // NewModel constructs the root model and wires up the initial dashboard view.
@@ -45,6 +47,7 @@ func (m *Model) Init() tea.Cmd {
 
 type installDoneMsg struct{ err error }
 type upgradeDoneMsg struct{ err error }
+type addonsDoneMsg struct{ err error }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -69,6 +72,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nodepools = NewNodePoolsModel(msg.KubeContext)
 			m.current = viewNodePools
 			return m, m.nodepools.Init()
+		case NavAddons:
+			m.addonsView = NewAddonsModel(msg.KubeContext)
+			m.current = viewAddons
+			return m, m.addonsView.Init()
+		case NavAddonsInstall:
+			return m, m.execAddonsInstall(msg.AddonID, msg.KubeContext)
+		case NavAddonsUninstall:
+			return m, m.execAddonsUninstall(msg.AddonID, msg.KubeContext)
 		}
 		return m, nil
 
@@ -76,6 +87,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.current = viewDashboard
 		m.dashboard.loading = true
 		return m, loadClusters(m.dashboard.kubeCtx)
+
+	case addonsDoneMsg:
+		m.current = viewAddons
+		if m.addonsView != nil {
+			m.addonsView.loading = true
+			return m, m.addonsView.Init()
+		}
 	}
 
 	// Delegate all other messages to the active view.
@@ -90,6 +108,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nodepools = updated
 			return m, cmd
 		}
+	case viewAddons:
+		if m.addonsView != nil {
+			updated, cmd := m.addonsView.Update(msg)
+			m.addonsView = updated
+			return m, cmd
+		}
 	}
 
 	return m, nil
@@ -101,10 +125,12 @@ func (m *Model) View() string {
 		if m.nodepools != nil {
 			return m.nodepools.View()
 		}
-		return m.dashboard.View()
-	default:
-		return m.dashboard.View()
+	case viewAddons:
+		if m.addonsView != nil {
+			return m.addonsView.View()
+		}
 	}
+	return m.dashboard.View()
 }
 
 // execInstall suspends the TUI and runs `karpx install -c <context>` interactively.
@@ -124,6 +150,39 @@ func (m *Model) execInstall(kubeCtx, region string) tea.Cmd {
 	cmd := exec.Command(exe, args...)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return installDoneMsg{err: err}
+	})
+}
+
+// execAddonsInstall suspends the TUI and runs `karpx addons install <id> -c <context>`.
+// When the process exits the TUI resumes and the add-ons view refreshes.
+func (m *Model) execAddonsInstall(addonID, kubeCtx string) tea.Cmd {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = os.Args[0]
+	}
+	args := []string{"addons", "install", addonID}
+	if kubeCtx != "" {
+		args = append(args, "-c", kubeCtx)
+	}
+	cmd := exec.Command(exe, args...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return addonsDoneMsg{err: err}
+	})
+}
+
+// execAddonsUninstall suspends the TUI and runs `karpx addons uninstall <id> -c <context>`.
+func (m *Model) execAddonsUninstall(addonID, kubeCtx string) tea.Cmd {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = os.Args[0]
+	}
+	args := []string{"addons", "uninstall", addonID}
+	if kubeCtx != "" {
+		args = append(args, "-c", kubeCtx)
+	}
+	cmd := exec.Command(exe, args...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return addonsDoneMsg{err: err}
 	})
 }
 

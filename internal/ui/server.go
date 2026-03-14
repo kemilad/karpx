@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kemilad/karpx/internal/addons"
 	"github.com/kemilad/karpx/internal/compat"
 	"github.com/kemilad/karpx/internal/helm"
 	"github.com/kemilad/karpx/internal/kube"
@@ -140,6 +141,25 @@ type RecommendResponse struct {
 type ApplyRequest struct {
 	Context  string `json:"context"`
 	Manifest string `json:"manifest"`
+}
+
+// AddonStatusEntry is one row in the GET /api/addons response.
+type AddonStatusEntry struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	Release     string `json:"release"`
+	Namespace   string `json:"namespace"`
+	Status      string `json:"status"` // "installed" | "not_installed" | "error"
+	Version     string `json:"version,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// AddonActionRequest is the JSON body for POST /api/addons/install and /api/addons/uninstall.
+type AddonActionRequest struct {
+	Context string `json:"context"`
+	AddonID string `json:"addon_id"`
 }
 
 // Serve starts the dashboard HTTP server on the given port.
@@ -772,6 +792,154 @@ func Serve(port int, kubeCtx string) error {
 			return
 		}
 		json.NewEncoder(w).Encode(InstallResponse{Success: true, Output: strings.TrimSpace(string(out))})
+	})
+
+	// ── Add-ons list ────────────────────────────────────────────────────────
+	mux.HandleFunc("/api/addons", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		kubeCtxParam := r.URL.Query().Get("context")
+		catalog := addons.Registry()
+		entries := make([]AddonStatusEntry, len(catalog))
+		for i, a := range catalog {
+			e := addons.Detect(kubeCtxParam, a)
+			status := "not_installed"
+			switch e.Status {
+			case addons.StatusInstalled:
+				status = "installed"
+			case addons.StatusError:
+				status = "error"
+			}
+			entries[i] = AddonStatusEntry{
+				ID:          a.ID,
+				Name:        a.Name,
+				Description: a.Description,
+				Category:    a.Category,
+				Release:     a.Release,
+				Namespace:   a.Namespace,
+				Status:      status,
+				Version:     e.InstalledVersion,
+				Error:       e.Error,
+			}
+		}
+		json.NewEncoder(w).Encode(entries)
+	})
+
+	// ── Add-on install ───────────────────────────────────────────────────────
+	mux.HandleFunc("/api/addons/install", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req AddonActionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			return
+		}
+		a, ok := addons.ByID(req.AddonID)
+		if !ok {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "unknown add-on: " + req.AddonID})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		var steps []string
+		addStep := func(s string) { steps = append(steps, s) }
+
+		// Step 1: add helm repo
+		addStep(fmt.Sprintf("Adding Helm repo %s…", a.RepoName))
+		out, err := exec.CommandContext(ctx, "helm", "repo", "add", a.RepoName, a.RepoURL, "--force-update").CombinedOutput()
+		if err != nil {
+			addStep("✗ " + strings.TrimSpace(string(out)))
+			json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
+			return
+		}
+		addStep("✓ Repo added")
+
+		// Step 2: update repos
+		addStep("Updating Helm repos…")
+		if out, err = exec.CommandContext(ctx, "helm", "repo", "update").CombinedOutput(); err != nil {
+			addStep("⚠ repo update: " + strings.TrimSpace(string(out)))
+		} else {
+			addStep("✓ Repos updated")
+		}
+
+		// Step 3: create namespace (ignore error — may already exist)
+		nsArgs := []string{"create", "namespace", a.Namespace}
+		if req.Context != "" {
+			nsArgs = append(nsArgs, "--context", req.Context)
+		}
+		_ = exec.CommandContext(ctx, "kubectl", nsArgs...).Run()
+		addStep(fmt.Sprintf("✓ Namespace %q ready", a.Namespace))
+
+		// Step 4: helm upgrade --install
+		addStep(fmt.Sprintf("Installing %s (this may take several minutes)…", a.Name))
+		installArgs := []string{
+			"upgrade", "--install", a.Release, a.Chart,
+			"--namespace", a.Namespace,
+			"--wait", "--timeout", "9m",
+		}
+		for _, sv := range a.SetValues {
+			installArgs = append(installArgs, "--set", sv)
+		}
+		if req.Context != "" {
+			installArgs = append(installArgs, "--kube-context", req.Context)
+		}
+		out, err = exec.CommandContext(ctx, "helm", installArgs...).CombinedOutput()
+		if err != nil {
+			addStep("✗ " + strings.TrimSpace(string(out)))
+			json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
+			return
+		}
+		addStep(fmt.Sprintf("✓ %s installed successfully", a.Name))
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Steps: steps})
+	})
+
+	// ── Add-on uninstall ─────────────────────────────────────────────────────
+	mux.HandleFunc("/api/addons/uninstall", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req AddonActionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			return
+		}
+		a, ok := addons.ByID(req.AddonID)
+		if !ok {
+			json.NewEncoder(w).Encode(InstallResponse{Error: "unknown add-on: " + req.AddonID})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		var steps []string
+		addStep := func(s string) { steps = append(steps, s) }
+
+		addStep(fmt.Sprintf("Uninstalling %s…", a.Name))
+		unArgs := []string{"uninstall", a.Release, "--namespace", a.Namespace}
+		if req.Context != "" {
+			unArgs = append(unArgs, "--kube-context", req.Context)
+		}
+		out, err := exec.CommandContext(ctx, "helm", unArgs...).CombinedOutput()
+		if err != nil {
+			addStep("✗ " + strings.TrimSpace(string(out)))
+			json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
+			return
+		}
+		addStep(fmt.Sprintf("✓ %s uninstalled", a.Name))
+		json.NewEncoder(w).Encode(InstallResponse{Success: true, Steps: steps})
 	})
 
 	srv := &http.Server{

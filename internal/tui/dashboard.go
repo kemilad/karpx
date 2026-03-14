@@ -102,6 +102,8 @@ func (m *DashboardModel) Update(msg tea.Msg) (*DashboardModel, tea.Cmd) {
 			return m, m.navUpgrade()
 		case "n":
 			return m, m.navNodePools()
+		case "a":
+			return m, m.navAddons()
 		case "r":
 			m.loading = true
 			return m, loadClusters(m.kubeCtx)
@@ -267,9 +269,10 @@ func (m *DashboardModel) renderHints() string {
 				hints = append(hints, KeyActive("u", "upgrade"))
 			}
 		}
-		// Always show nodepools — useful even when detection missed a pre-installed Karpenter.
+		// Always show nodepools and add-ons — useful even when detection missed a pre-installed Karpenter.
 		if !sel.Checking {
 			hints = append(hints, Key("n", "nodepools"))
+			hints = append(hints, Key("a", "add-ons"))
 		}
 	}
 	hints = append(hints, Key("q", "quit"))
@@ -319,6 +322,16 @@ func (m *DashboardModel) navNodePools() tea.Cmd {
 	}
 	return func() tea.Msg {
 		return NavigateMsg{Target: NavNodePools, KubeContext: s.Context, Region: m.region}
+	}
+}
+
+func (m *DashboardModel) navAddons() tea.Cmd {
+	s := m.selected()
+	if s == nil || s.Checking {
+		return nil
+	}
+	return func() tea.Msg {
+		return NavigateMsg{Target: NavAddons, KubeContext: s.Context, Region: m.region}
 	}
 }
 

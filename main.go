@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/kemilad/karpx/internal/addons"
 	"github.com/kemilad/karpx/internal/compat"
 	"github.com/kemilad/karpx/internal/helm"
 	"github.com/kemilad/karpx/internal/kube"
@@ -79,7 +80,7 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().StringVarP(&region,  "region",  "r", "", "AWS region (default: from AWS config)")
 	root.SilenceUsage = true
 
-	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), uninstallCmd(), nodePoolsCmd(), nodesCmd(), uiCmd(), versionCmd())
+	root.AddCommand(detectCmd(), installCmd(), upgradeCmd(), uninstallCmd(), nodePoolsCmd(), nodesCmd(), uiCmd(), versionCmd(), addonsCmd())
 	return root
 }
 
@@ -1405,6 +1406,128 @@ func printUnsupportedProvider() {
     karpx install --provider gcp   -c <context>
 
 `)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// addons command
+// ─────────────────────────────────────────────────────────────────────────────
+
+func addonsCmd() *cobra.Command {
+	var kubeCtx string
+
+	cmd := &cobra.Command{
+		Use:   "addons",
+		Short: "Manage optional open-source add-ons (Grafana, Loki, Prometheus, KEDA, cert-manager)",
+		Long: `
+  Manage optional add-ons for your Kubernetes cluster.
+
+  Available add-ons:
+    loki-stack             Grafana + Loki + Promtail   (log aggregation)
+    kube-prometheus-stack  Grafana + Prometheus + Node Exporter  (metrics)
+    keda                   Kubernetes Event-Driven Autoscaling
+    cert-manager           Automatic TLS certificate provisioning and renewal
+
+  Examples:
+    karpx addons list
+    karpx addons install loki-stack -c my-cluster
+    karpx addons uninstall cert-manager -c my-cluster
+`,
+	}
+	cmd.PersistentFlags().StringVarP(&kubeCtx, "context", "c", "", "kubeconfig context")
+
+	cmd.AddCommand(addonsListCmd(&kubeCtx), addonsInstallCmd(&kubeCtx), addonsUninstallCmd(&kubeCtx))
+	return cmd
+}
+
+func addonsListCmd(kubeCtx *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all available add-ons and their install status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAddonsList(*kubeCtx)
+		},
+	}
+}
+
+func addonsInstallCmd(kubeCtx *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "install <addon-id>",
+		Short: "Install an add-on into the cluster",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAddonsInstall(args[0], *kubeCtx)
+		},
+	}
+}
+
+func addonsUninstallCmd(kubeCtx *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall <addon-id>",
+		Short: "Uninstall an add-on from the cluster",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAddonsUninstall(args[0], *kubeCtx)
+		},
+	}
+}
+
+func runAddonsList(kubeCtx string) error {
+	fmt.Printf("\n  Add-ons status for %s\n\n", contextOrCurrent(kubeCtx))
+	fmt.Printf("  %-22s  %-14s  %-10s  %s\n", "NAME", "CATEGORY", "VERSION", "STATUS")
+	fmt.Printf("  %s\n", strings.Repeat("─", 70))
+
+	for _, a := range addons.Registry() {
+		e := addons.Detect(kubeCtx, a)
+		status := "not installed"
+		ver := "─"
+		switch e.Status {
+		case addons.StatusInstalled:
+			status = "● installed"
+			if e.InstalledVersion != "" {
+				ver = e.InstalledVersion
+			}
+		case addons.StatusError:
+			status = "! error: " + e.Error
+		}
+		fmt.Printf("  %-22s  %-14s  %-10s  %s\n", a.Name, a.Category, ver, status)
+	}
+	fmt.Println()
+	return nil
+}
+
+func runAddonsInstall(id, kubeCtx string) error {
+	a, ok := addons.ByID(id)
+	if !ok {
+		return fmt.Errorf("unknown add-on %q — run `karpx addons list` to see available add-ons", id)
+	}
+
+	fmt.Printf("\n  ⚡ karpx add-ons — installing %s\n", a.Name)
+	fmt.Printf("  %s\n", a.Description)
+
+	if err := addons.Install(kubeCtx, a); err != nil {
+		fmt.Printf("\n  ✗ Installation failed: %v\n\n", err)
+		return err
+	}
+
+	fmt.Printf("\n  ✓ %s installed successfully.\n\n", a.Name)
+	return nil
+}
+
+func runAddonsUninstall(id, kubeCtx string) error {
+	a, ok := addons.ByID(id)
+	if !ok {
+		return fmt.Errorf("unknown add-on %q — run `karpx addons list` to see available add-ons", id)
+	}
+
+	fmt.Printf("\n  ⚡ karpx add-ons — uninstalling %s\n", a.Name)
+
+	if err := addons.Uninstall(kubeCtx, a); err != nil {
+		fmt.Printf("\n  ✗ Uninstall failed: %v\n\n", err)
+		return err
+	}
+
+	fmt.Printf("\n  ✓ %s uninstalled successfully.\n\n", a.Name)
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
