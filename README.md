@@ -149,10 +149,40 @@ open-source tools into any cluster via Helm — no separate `helm add repo` or
 
 | ID | Name | Category | What it does |
 |----|------|----------|-------------|
-| `loki-stack` | Logging Stack | Logging | Grafana + Loki + Promtail — log aggregation and live exploration |
+| `loki-stack` | Logging Stack | Logging | Loki + Promtail + Grafana — log aggregation and live exploration |
 | `kube-prometheus-stack` | Monitoring Stack | Monitoring | Grafana + Prometheus + Node Exporter — metrics and dashboards |
+| `aws-load-balancer-controller` | AWS Load Balancer Controller | Networking | Provision AWS ALB/NLB for Kubernetes Services and Ingresses |
 | `keda` | KEDA | Autoscaling | Kubernetes Event-Driven Autoscaling — scale on queues, topics, and more |
 | `cert-manager` | cert-manager | Security | Automatic TLS certificate provisioning via Let's Encrypt / ACME |
+
+#### Shared Grafana — no duplicate instances
+
+When both `loki-stack` and `kube-prometheus-stack` are installed, karpx
+automatically disables the duplicate Grafana so only **one** Grafana instance
+runs in the `monitoring` namespace:
+
+- Installing **kube-prometheus-stack** when loki-stack is already present → karpx
+  upgrades loki-stack with `grafana.enabled=false` automatically.
+- Installing **loki-stack** when kube-prometheus-stack is already present →
+  loki-stack is installed without its own Grafana from the start.
+
+In both cases, all logs (Loki) and metrics (Prometheus) are visible through the
+**single shared Grafana** from `kube-prometheus-stack`.
+
+#### Grafana access after install
+
+After installing any observability add-on, karpx prints a ready-to-use
+port-forward command and URL:
+
+```
+  ─── Grafana ─────────────────────────────────────────────────────
+  Port-forward:  kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
+  URL:           http://localhost:3000
+  Credentials:   admin / prom-operator
+  ─────────────────────────────────────────────────────────────────
+```
+
+Open `http://localhost:3000` in your browser to explore logs and metrics.
 
 #### CLI usage
 
@@ -160,15 +190,33 @@ open-source tools into any cluster via Helm — no separate `helm add repo` or
 # List all add-ons and their status on a cluster
 karpx addons list -c my-cluster
 
-# Install an add-on
-karpx addons install loki-stack -c my-cluster
+# Install observability stack (Grafana is shared automatically)
 karpx addons install kube-prometheus-stack -c my-cluster
+karpx addons install loki-stack -c my-cluster
+
+# Install networking add-on (cluster name is derived from context automatically)
+karpx addons install aws-load-balancer-controller -c my-cluster
+
+# Install other add-ons
 karpx addons install keda -c my-cluster
 karpx addons install cert-manager -c my-cluster
 
 # Uninstall an add-on
 karpx addons uninstall loki-stack -c my-cluster
 ```
+
+#### AWS Load Balancer Controller — IAM setup
+
+After installing `aws-load-balancer-controller`, annotate the ServiceAccount with
+your IAM role ARN so the controller can provision ALBs and NLBs:
+
+```bash
+kubectl annotate serviceaccount -n kube-system aws-load-balancer-controller \
+  eks.amazonaws.com/role-arn=arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>
+```
+
+See the [official setup guide](https://kubernetes-sigs.github.io/aws-load-balancer-controller/)
+for instructions on creating the required IAM policy and role.
 
 #### TUI usage
 
