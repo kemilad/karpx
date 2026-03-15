@@ -307,6 +307,44 @@ func Install(kubeCtx string, a Addon) error {
 	// Ignore error — namespace may already exist.
 	_ = exec.Command("kubectl", nsArgs...).Run()
 
+	// ── Step 3.5: disable sibling's Grafana BEFORE installing ────────────
+	// Must run before our install so our Grafana doesn't start up and pick up
+	// the sibling's datasource ConfigMap (which also has isDefault:true),
+	// causing a "multiple default datasources" crashloop.
+	siblingReconfigured := false
+	if a.ReconfigureSiblingID != "" {
+		if sib, ok := ByID(a.ReconfigureSiblingID); ok && isReleaseInstalled(kubeCtx, sib.Release) {
+			fmt.Printf("\n  ℹ  %s detected — disabling its Grafana before installing to prevent datasource conflicts …\n", sib.Name)
+			upArgs := []string{
+				"upgrade", sib.Release, sib.Chart,
+				"--namespace", sib.Namespace,
+				"--reuse-values",
+				"--set", "grafana.enabled=false",
+				"--wait", "--timeout", "5m",
+			}
+			if kubeCtx != "" {
+				upArgs = append(upArgs, "--kube-context", kubeCtx)
+			}
+			upCmd := exec.Command("helm", upArgs...)
+			upCmd.Stdout = os.Stdout
+			upCmd.Stderr = os.Stderr
+			_ = upCmd.Run() // best-effort
+			siblingReconfigured = true
+
+			// Also add the sibling's data service as a non-default datasource
+			// in this addon's Grafana so data remains visible after install.
+			if sib.ID == "loki-stack" {
+				setValues = append(setValues,
+					"grafana.additionalDataSources[0].name=Loki",
+					"grafana.additionalDataSources[0].type=loki",
+					"grafana.additionalDataSources[0].url=http://loki-stack:3100",
+					"grafana.additionalDataSources[0].access=proxy",
+					"grafana.additionalDataSources[0].isDefault=false",
+				)
+			}
+		}
+	}
+
 	// ── Step 4: helm upgrade --install ────────────────────────────────────
 	fmt.Printf("  Installing %s (this may take a few minutes) …\n\n", a.Name)
 	installArgs := []string{
@@ -328,15 +366,21 @@ func Install(kubeCtx string, a Addon) error {
 		return fmt.Errorf("helm install failed (see output above)")
 	}
 
-	// ── Step 5: reconfigure sibling to share Grafana ──────────────────────
-	if a.ReconfigureSiblingID != "" {
-		if sib, ok := ByID(a.ReconfigureSiblingID); ok && isReleaseInstalled(kubeCtx, sib.Release) {
-			fmt.Printf("\n  ℹ  %s detected — upgrading it to share Grafana …\n", sib.Name)
+	// ── Step 5: add this stack's datasource to the sibling's Grafana ────────
+	// When this addon's Grafana is disabled (sibling provides it), upgrade the
+	// sibling to expose this stack's data as a non-default datasource.
+	if grafanaDisabledBy != "" && a.ID == "loki-stack" {
+		if prom, ok := ByID("kube-prometheus-stack"); ok {
+			fmt.Printf("\n  ℹ  Adding Loki datasource to the shared Grafana …\n")
 			upArgs := []string{
-				"upgrade", sib.Release, sib.Chart,
-				"--namespace", sib.Namespace,
+				"upgrade", prom.Release, prom.Chart,
+				"--namespace", prom.Namespace,
 				"--reuse-values",
-				"--set", "grafana.enabled=false",
+				"--set", "grafana.additionalDataSources[0].name=Loki",
+				"--set", "grafana.additionalDataSources[0].type=loki",
+				"--set", "grafana.additionalDataSources[0].url=http://loki-stack:3100",
+				"--set", "grafana.additionalDataSources[0].access=proxy",
+				"--set", "grafana.additionalDataSources[0].isDefault=false",
 				"--wait", "--timeout", "5m",
 			}
 			if kubeCtx != "" {
@@ -345,9 +389,10 @@ func Install(kubeCtx string, a Addon) error {
 			upCmd := exec.Command("helm", upArgs...)
 			upCmd.Stdout = os.Stdout
 			upCmd.Stderr = os.Stderr
-			_ = upCmd.Run() // best-effort; don't fail the parent install
+			_ = upCmd.Run() // best-effort
 		}
 	}
+	_ = siblingReconfigured // already done in Step 3.5
 
 	// ── Step 6: print Grafana access hint ────────────────────────────────
 	printGrafanaHint(kubeCtx, a, grafanaDisabledBy)
