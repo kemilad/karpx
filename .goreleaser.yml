@@ -56,7 +56,7 @@ brews:
       name: goreleaserbot
       email: bot@goreleaser.com
     homepage: "https://github.com/kemilad/karpx"
-    description: "⚡ Karpenter for EKS — managed from your terminal"
+    description: "⚡ The Kubernetes essentials toolkit"
     license: "Apache-2.0"
     install: |
       bin.install "karpx"
