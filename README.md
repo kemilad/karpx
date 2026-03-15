@@ -11,8 +11,7 @@
   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝
 ```
 
-A single-binary TUI to install, upgrade, and configure [Karpenter](https://karpenter.sh)
-across your Kubernetes clusters — no YAML, no context-switching, just your terminal.
+A single-binary toolkit to deploy and manage Kubernetes essentials — autoscaling, observability, networking, and more — across your clusters. No YAML, no context-switching, just your terminal.
 
 ## Cloud Provider Support
 
