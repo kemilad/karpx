@@ -140,6 +140,20 @@ type InstallResponse struct {
 	GrafanaCmd string   `json:"grafana_cmd,omitempty"` // kubectl port-forward command
 }
 
+// addonInstallEvent is a single NDJSON line streamed by POST /api/addons/install.
+// The client reads the body as a stream; each newline-terminated JSON object
+// carries a step message and cumulative percentage.  The final object has
+// Done==true and carries the success/error outcome.
+type addonInstallEvent struct {
+	Step       string `json:"step,omitempty"`
+	Pct        int    `json:"pct"`
+	Done       bool   `json:"done,omitempty"`
+	Success    bool   `json:"success,omitempty"`
+	Error      string `json:"error,omitempty"`
+	GrafanaURL string `json:"grafana_url,omitempty"`
+	GrafanaCmd string `json:"grafana_cmd,omitempty"`
+}
+
 // UninstallRequest is the JSON body for POST /api/uninstall.
 type UninstallRequest struct {
 	Context         string `json:"context"`
@@ -947,25 +961,37 @@ func Serve(port int, kubeCtx string) error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
+		// Stream newline-delimited JSON so the browser can update progress in real time.
+		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		flusher, _ := w.(http.Flusher)
+
+		sendEvt := func(evt addonInstallEvent) {
+			b, _ := json.Marshal(evt)
+			w.Write(append(b, '\n'))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		sendStep := func(step string, pct int) { sendEvt(addonInstallEvent{Step: step, Pct: pct}) }
+		sendFail := func(step, errMsg string, pct int) {
+			sendEvt(addonInstallEvent{Step: step, Pct: pct, Done: true, Success: false, Error: errMsg})
+		}
 
 		var req AddonActionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			sendFail("✗ invalid request body", "invalid request body", 0)
 			return
 		}
 		a, ok := addons.ByID(req.AddonID)
 		if !ok {
-			json.NewEncoder(w).Encode(InstallResponse{Error: "unknown add-on: " + req.AddonID})
+			sendFail("✗ unknown add-on: "+req.AddonID, "unknown add-on: "+req.AddonID, 0)
 			return
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-
-		var steps []string
-		addStep := func(s string) { steps = append(steps, s) }
 
 		// ── Build effective set-values (shared-Grafana + cluster name) ────
 		setValues := make([]string, len(a.SetValues))
@@ -976,7 +1002,7 @@ func Serve(port int, kubeCtx string) error {
 			if addons.IsReleaseInstalled(req.Context, rel) {
 				setValues = addonOverrideSetValue(setValues, "grafana.enabled", "false")
 				grafanaDisabledBy = rel
-				addStep(fmt.Sprintf("ℹ  Grafana already provided by %s — skipping duplicate", rel))
+				sendStep(fmt.Sprintf("ℹ  Grafana already provided by %s — skipping duplicate", rel), 3)
 				break
 			}
 		}
@@ -984,45 +1010,44 @@ func Serve(port int, kubeCtx string) error {
 		if a.RequiresClusterName {
 			if cn := addonClusterName(req.Context); cn != "" {
 				setValues = append(setValues, "clusterName="+cn)
-				addStep(fmt.Sprintf("ℹ  Cluster name: %s", cn))
+				sendStep(fmt.Sprintf("ℹ  Cluster name: %s", cn), 3)
 			}
 		}
 
 		if a.RequiresRegion {
 			if region := addonRegion(req.Context); region != "" {
 				setValues = append(setValues, "region="+region)
-				addStep(fmt.Sprintf("ℹ  AWS region: %s", region))
+				sendStep(fmt.Sprintf("ℹ  AWS region: %s", region), 3)
 			}
 		}
 
 		if a.RequiresVPCID {
 			region := addonRegion(req.Context)
 			clusterName := addonClusterName(req.Context)
-			addStep(fmt.Sprintf("ℹ  Looking up VPC ID for cluster %q…", clusterName))
+			sendStep(fmt.Sprintf("ℹ  Looking up VPC ID for cluster %q…", clusterName), 3)
 			if vpcID := addonVPCID(region, clusterName); vpcID != "" {
 				setValues = append(setValues, "vpcId="+vpcID)
-				addStep(fmt.Sprintf("ℹ  VPC ID: %s", vpcID))
+				sendStep(fmt.Sprintf("ℹ  VPC ID: %s", vpcID), 4)
 			} else {
-				addStep("⚠ Could not resolve VPC ID — install may fail if IMDS is unavailable")
+				sendStep("⚠ Could not resolve VPC ID — install may fail if IMDS is unavailable", 4)
 			}
 		}
 
 		// Step 1: add helm repo
-		addStep(fmt.Sprintf("Adding Helm repo %s…", a.RepoName))
+		sendStep(fmt.Sprintf("Adding Helm repo %s…", a.RepoName), 5)
 		out, err := exec.CommandContext(ctx, "helm", "repo", "add", a.RepoName, a.RepoURL, "--force-update").CombinedOutput()
 		if err != nil {
-			addStep("✗ " + strings.TrimSpace(string(out)))
-			json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
+			sendFail("✗ "+strings.TrimSpace(string(out)), strings.TrimSpace(string(out)), 5)
 			return
 		}
-		addStep("✓ Repo added")
+		sendStep("✓ Repo added", 12)
 
 		// Step 2: update repos
-		addStep("Updating Helm repos…")
+		sendStep("Updating Helm repos…", 12)
 		if out, err = exec.CommandContext(ctx, "helm", "repo", "update").CombinedOutput(); err != nil {
-			addStep("⚠ repo update: " + strings.TrimSpace(string(out)))
+			sendStep("⚠ repo update: "+strings.TrimSpace(string(out)), 18)
 		} else {
-			addStep("✓ Repos updated")
+			sendStep("✓ Repos updated", 18)
 		}
 
 		// Step 3: create namespace (ignore error — may already exist)
@@ -1031,14 +1056,14 @@ func Serve(port int, kubeCtx string) error {
 			nsArgs = append(nsArgs, "--context", req.Context)
 		}
 		_ = exec.CommandContext(ctx, "kubectl", nsArgs...).Run()
-		addStep(fmt.Sprintf("✓ Namespace %q ready", a.Namespace))
+		sendStep(fmt.Sprintf("✓ Namespace %q ready", a.Namespace), 22)
 
 		// Step 3.5: disable sibling's Grafana BEFORE installing to prevent
 		// "multiple default datasources" crashloop in our Grafana.
 		siblingReconfigured := false
 		if a.ReconfigureSiblingID != "" {
 			if sib, sibOK := addons.ByID(a.ReconfigureSiblingID); sibOK && addons.IsReleaseInstalled(req.Context, sib.Release) {
-				addStep(fmt.Sprintf("ℹ  Disabling %s Grafana before install to prevent datasource conflicts…", sib.Name))
+				sendStep(fmt.Sprintf("Disabling %s Grafana to prevent datasource conflicts…", sib.Name), 25)
 				upArgs := []string{
 					"upgrade", sib.Release, sib.Chart,
 					"--namespace", sib.Namespace,
@@ -1050,13 +1075,12 @@ func Serve(port int, kubeCtx string) error {
 				}
 				upOut, upErr := exec.CommandContext(ctx, "helm", upArgs...).CombinedOutput()
 				if upErr != nil {
-					addStep("⚠ " + strings.TrimSpace(string(upOut)))
+					sendStep("⚠ "+strings.TrimSpace(string(upOut)), 30)
 				} else {
-					addStep(fmt.Sprintf("✓ %s Grafana disabled", sib.Name))
+					sendStep(fmt.Sprintf("✓ %s Grafana disabled", sib.Name), 30)
 				}
 				siblingReconfigured = true
 
-				// Add sibling's data service as a non-default datasource in our Grafana.
 				if sib.ID == "loki-stack" {
 					setValues = append(setValues,
 						"grafana.additionalDataSources[0].name=Loki",
@@ -1069,8 +1093,13 @@ func Serve(port int, kubeCtx string) error {
 			}
 		}
 
-		// Step 4: helm upgrade --install
-		addStep(fmt.Sprintf("Installing %s (this may take several minutes)…", a.Name))
+		// Step 4: helm upgrade --install — run in goroutine and tick progress.
+		helmStartPct := 25
+		if siblingReconfigured {
+			helmStartPct = 33
+		}
+		sendStep(fmt.Sprintf("Installing %s (this may take several minutes)…", a.Name), helmStartPct)
+
 		installArgs := []string{
 			"upgrade", "--install", a.Release, a.Chart,
 			"--namespace", a.Namespace,
@@ -1082,20 +1111,47 @@ func Serve(port int, kubeCtx string) error {
 		if req.Context != "" {
 			installArgs = append(installArgs, "--kube-context", req.Context)
 		}
-		out, err = exec.CommandContext(ctx, "helm", installArgs...).CombinedOutput()
-		if err != nil {
-			addStep("✗ " + strings.TrimSpace(string(out)))
-			json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
+
+		type helmRes struct {
+			out []byte
+			err error
+		}
+		helmDone := make(chan helmRes, 1)
+		go func() {
+			o, e := exec.CommandContext(ctx, "helm", installArgs...).CombinedOutput()
+			helmDone <- helmRes{o, e}
+		}()
+
+		curPct := helmStartPct
+		ticker := time.NewTicker(10 * time.Second)
+		var hRes helmRes
+	helmLoop:
+		for {
+			select {
+			case hRes = <-helmDone:
+				break helmLoop
+			case <-ticker.C:
+				curPct += 5
+				if curPct > 84 {
+					curPct = 84
+				}
+				sendStep(fmt.Sprintf("Installing %s…", a.Name), curPct)
+			}
+		}
+		ticker.Stop()
+
+		if hRes.err != nil {
+			sendFail("✗ helm install failed:\n"+strings.TrimSpace(string(hRes.out)),
+				"helm install failed", curPct)
 			return
 		}
-		addStep(fmt.Sprintf("✓ %s installed successfully", a.Name))
+		sendStep(fmt.Sprintf("✓ %s installed successfully", a.Name), 88)
 
-		// Step 5: add this stack's datasource to the sibling's Grafana
-		// (only needed when our Grafana is disabled because sibling provides it).
-		_ = siblingReconfigured // reconfiguration already done in Step 3.5
+		// Step 5: add this stack's datasource to the sibling's Grafana.
+		_ = siblingReconfigured // already done in Step 3.5
 		if grafanaDisabledBy != "" && a.ID == "loki-stack" {
 			if prom, promOK := addons.ByID("kube-prometheus-stack"); promOK {
-				addStep("ℹ  Adding Loki datasource to the shared Grafana…")
+				sendStep("Adding Loki datasource to the shared Grafana…", 91)
 				upArgs := []string{
 					"upgrade", prom.Release, prom.Chart,
 					"--namespace", prom.Namespace,
@@ -1112,14 +1168,14 @@ func Serve(port int, kubeCtx string) error {
 				}
 				upOut, upErr := exec.CommandContext(ctx, "helm", upArgs...).CombinedOutput()
 				if upErr != nil {
-					addStep("⚠ " + strings.TrimSpace(string(upOut)))
+					sendStep("⚠ "+strings.TrimSpace(string(upOut)), 94)
 				} else {
-					addStep("✓ Loki datasource added to shared Grafana")
+					sendStep("✓ Loki datasource added to shared Grafana", 94)
 				}
 			}
 		}
 
-		// Step 6: build Grafana access info
+		// Step 6: build Grafana access info and send final done event.
 		grafanaSvc := a.GrafanaSvc
 		grafanaNS := a.Namespace
 		grafanaCreds := a.GrafanaDefaultCreds
@@ -1134,18 +1190,23 @@ func Serve(port int, kubeCtx string) error {
 			}
 		}
 
-		resp := InstallResponse{Success: true, Steps: steps}
+		finalEvt := addonInstallEvent{
+			Step:    "✓ Done",
+			Pct:     100,
+			Done:    true,
+			Success: true,
+		}
 		if grafanaSvc != "" {
-			resp.GrafanaURL = "http://localhost:3000"
-			resp.GrafanaCmd = fmt.Sprintf("kubectl port-forward -n %s svc/%s 3000:80", grafanaNS, grafanaSvc)
+			finalEvt.GrafanaURL = "http://localhost:3000"
+			finalEvt.GrafanaCmd = fmt.Sprintf("kubectl port-forward -n %s svc/%s 3000:80", grafanaNS, grafanaSvc)
 			if req.Context != "" {
-				resp.GrafanaCmd += " --context " + req.Context
+				finalEvt.GrafanaCmd += " --context " + req.Context
 			}
 			if grafanaCreds != "" {
-				resp.GrafanaCmd += "\n# credentials: " + grafanaCreds
+				finalEvt.GrafanaCmd += "\n# credentials: " + grafanaCreds
 			}
 		}
-		json.NewEncoder(w).Encode(resp)
+		sendEvt(finalEvt)
 	})
 
 	// ── Add-on uninstall ─────────────────────────────────────────────────────
