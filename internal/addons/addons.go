@@ -56,6 +56,10 @@ type Addon struct {
 	// Helm set-values, deriving the name from the kubeconfig context.
 	RequiresClusterName bool
 
+	// RequiresRegion, when true, injects region=<region> into the Helm
+	// set-values, deriving the AWS region from the kubeconfig context EKS ARN.
+	RequiresRegion bool
+
 	// PostInstallNotes is extra text printed after a successful install.
 	PostInstallNotes string
 }
@@ -116,6 +120,7 @@ func Registry() []Addon {
 			Release:     "aws-load-balancer-controller",
 			// clusterName is injected automatically from kubeconfig context.
 			RequiresClusterName: true,
+			RequiresRegion:      true,
 			PostInstallNotes: `  ℹ  The AWS Load Balancer Controller needs an IAM role with the
   AWSLoadBalancerControllerIAMPolicy attached, annotated on its ServiceAccount:
 
@@ -223,6 +228,18 @@ func clusterNameFromCtx(kubeCtx string) string {
 	return kubeCtx
 }
 
+// regionFromCtx extracts the AWS region from a kubeconfig context EKS ARN.
+// EKS ARN: "arn:aws:eks:<region>:<account>:cluster/<name>" → "<region>"
+// Returns "" if the context is not an EKS ARN.
+func regionFromCtx(kubeCtx string) string {
+	// arn:aws:eks:<region>:<account>:cluster/<name>
+	parts := strings.Split(kubeCtx, ":")
+	if len(parts) >= 6 && parts[0] == "arn" && parts[2] == "eks" {
+		return parts[3]
+	}
+	return ""
+}
+
 // Detect queries helm to determine whether an add-on is installed in a cluster.
 func Detect(kubeCtx string, a Addon) Entry {
 	e := Entry{Addon: a, Status: StatusNotInstalled}
@@ -282,6 +299,13 @@ func Install(kubeCtx string, a Addon) error {
 	if a.RequiresClusterName {
 		if cn := clusterNameFromCtx(kubeCtx); cn != "" {
 			setValues = append(setValues, "clusterName="+cn)
+		}
+	}
+
+	if a.RequiresRegion {
+		if region := regionFromCtx(kubeCtx); region != "" {
+			setValues = append(setValues, "region="+region)
+			fmt.Printf("  ℹ  Detected AWS region: %s\n", region)
 		}
 	}
 

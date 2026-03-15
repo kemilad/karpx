@@ -988,6 +988,13 @@ func Serve(port int, kubeCtx string) error {
 			}
 		}
 
+		if a.RequiresRegion {
+			if region := addonRegion(req.Context); region != "" {
+				setValues = append(setValues, "region="+region)
+				addStep(fmt.Sprintf("ℹ  AWS region: %s", region))
+			}
+		}
+
 		// Step 1: add helm repo
 		addStep(fmt.Sprintf("Adding Helm repo %s…", a.RepoName))
 		out, err := exec.CommandContext(ctx, "helm", "repo", "add", a.RepoName, a.RepoURL, "--force-update").CombinedOutput()
@@ -1431,4 +1438,15 @@ func addonClusterName(kubeCtx string) string {
 		return kubeCtx[idx+9:]
 	}
 	return kubeCtx
+}
+
+// addonRegion extracts the AWS region from a kubeconfig context EKS ARN.
+// EKS ARN format: "arn:aws:eks:<region>:<account>:cluster/<name>" → "<region>"
+// Returns "" if the context is not an EKS ARN.
+func addonRegion(kubeCtx string) string {
+	parts := strings.Split(kubeCtx, ":")
+	if len(parts) >= 6 && parts[0] == "arn" && parts[2] == "eks" {
+		return parts[3]
+	}
+	return ""
 }
