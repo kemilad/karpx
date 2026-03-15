@@ -424,6 +424,24 @@ func Install(kubeCtx string, a Addon) error {
 		}
 	}
 
+	// ── Step 3.8: purge stale Grafana datasource ConfigMaps ──────────────
+	// Helm does not always garbage-collect the loki-stack datasource ConfigMap
+	// (label: grafana_datasource=1) when grafana.enabled is toggled off, leaving
+	// an isDefault:true entry that conflicts with Prometheus.  Delete all such
+	// ConfigMaps before our Grafana starts so it only sees its own datasources.
+	if a.GrafanaSvc != "" {
+		purgeArgs := []string{
+			"delete", "configmap",
+			"-n", a.Namespace,
+			"-l", "grafana_datasource=1",
+			"--ignore-not-found",
+		}
+		if kubeCtx != "" {
+			purgeArgs = append(purgeArgs, "--context", kubeCtx)
+		}
+		_, _ = exec.Command("kubectl", purgeArgs...).CombinedOutput() // best-effort
+	}
+
 	// ── Step 4: helm upgrade --install ────────────────────────────────────
 	helmStartPct := 25
 	if siblingReconfigured {
