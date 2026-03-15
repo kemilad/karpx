@@ -649,8 +649,22 @@
     }
     .addon-grafana-link:hover { background: rgba(34,197,94,0.12); }
     .addon-grafana-link[title] { cursor: help; }
-    .addons-log {
+    .addon-progress-wrap {
       display: none; margin-top: 1rem;
+    }
+    .addon-progress-bar-track {
+      background: var(--border); border-radius: 99px; height: 8px; overflow: hidden;
+    }
+    .addon-progress-bar-fill {
+      background: var(--accent); height: 100%; border-radius: 99px; width: 0%;
+      transition: width 0.4s ease;
+    }
+    .addon-progress-label {
+      margin-top: 0.35rem; font-size: 0.72rem; color: var(--muted);
+      font-family: var(--mono); display: flex; justify-content: space-between;
+    }
+    .addons-log {
+      display: none; margin-top: 0.75rem;
       background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
       padding: 0.8rem 1rem; font-size: 0.75rem; font-family: var(--mono);
       max-height: 220px; overflow-y: auto; white-space: pre-wrap; line-height: 1.7;
@@ -912,6 +926,15 @@
       <span style="color:var(--muted);font-size:0.78rem"><span class="spinner" style="width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:0.4rem"></span>Checking add-on status…</span>
     </div>
 
+    <div class="addon-progress-wrap" id="addon-progress-wrap">
+      <div class="addon-progress-bar-track">
+        <div class="addon-progress-bar-fill" id="addon-progress-fill"></div>
+      </div>
+      <div class="addon-progress-label">
+        <span id="addon-progress-step">Preparing…</span>
+        <span id="addon-progress-pct">0%</span>
+      </div>
+    </div>
     <div class="addons-log" id="addons-log"></div>
     <div class="grafana-url-box" id="grafana-url-box">
       <div class="grafana-label">Grafana ready</div>
@@ -1762,6 +1785,9 @@
     document.getElementById('addons-modal-ctx').textContent = 'Cluster: ' + clusterLabel;
     document.getElementById('addons-log').style.display = 'none';
     document.getElementById('addons-log').textContent = '';
+    document.getElementById('addon-progress-wrap').style.display = 'none';
+    document.getElementById('addon-progress-fill').style.width = '0%';
+    document.getElementById('addon-progress-fill').style.background = '';
     document.getElementById('grafana-url-box').style.display = 'none';
     document.getElementById('addons-table-wrap').innerHTML =
       '<span style="color:var(--muted);font-size:0.78rem"><span class="spinner" style="width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:0.4rem"></span>Checking add-on status…</span>';
@@ -1866,39 +1892,80 @@
     btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:middle"></span> Installing…';
 
     const log = document.getElementById('addons-log');
+    const progressWrap = document.getElementById('addon-progress-wrap');
+    const progressFill = document.getElementById('addon-progress-fill');
+    const progressStep = document.getElementById('addon-progress-step');
+    const progressPct  = document.getElementById('addon-progress-pct');
+
     log.textContent = '';
     log.style.display = 'block';
+    progressFill.style.width = '0%';
+    progressStep.textContent = 'Preparing…';
+    progressPct.textContent = '0%';
+    progressWrap.style.display = 'block';
 
+    const setProgress = (pct, step) => {
+      progressFill.style.width = pct + '%';
+      progressPct.textContent = pct + '%';
+      if (step) progressStep.textContent = step;
+    };
+
+    let success = false;
     try {
       const resp = await fetch('/api/addons/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ context: _addonsCtx, addon_id: addonId }),
       });
-      const result = await resp.json();
-      log.textContent = (result.steps || []).join('\n') || result.error || '';
-      if (result.success) {
-        showToast(`✓ ${addonId} installed successfully`, 'success', 6000);
-        if (result.grafana_url) {
-          const box = document.getElementById('grafana-url-box');
-          const link = document.getElementById('grafana-url-link');
-          const cmdEl = document.getElementById('grafana-url-cmd');
-          link.href = result.grafana_url;
-          link.textContent = result.grafana_url;
-          cmdEl.textContent = result.grafana_cmd || '';
-          box.style.display = 'block';
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop(); // keep any incomplete trailing line
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let evt;
+          try { evt = JSON.parse(line); } catch { continue; }
+          if (evt.step) {
+            log.textContent += evt.step + '\n';
+            log.scrollTop = log.scrollHeight;
+          }
+          setProgress(evt.pct || 0, evt.step || '');
+          if (evt.done) {
+            success = evt.success;
+            if (evt.success) {
+              setProgress(100, '✓ Done');
+              showToast(`✓ ${addonId} installed successfully`, 'success', 6000);
+              if (evt.grafana_url) {
+                const box = document.getElementById('grafana-url-box');
+                document.getElementById('grafana-url-link').href = evt.grafana_url;
+                document.getElementById('grafana-url-link').textContent = evt.grafana_url;
+                document.getElementById('grafana-url-cmd').textContent = evt.grafana_cmd || '';
+                box.style.display = 'block';
+              }
+              await loadAddons(_addonsCtx);
+            } else {
+              showToast(`Install failed: ${evt.error || 'unknown error'}`, 'error', 10000);
+              btn.disabled = false;
+              btn.textContent = orig;
+            }
+          }
         }
-        await loadAddons(_addonsCtx);
-      } else {
-        showToast(`Install failed: ${result.error || 'unknown error'}`, 'error', 10000);
-        btn.disabled = false;
-        btn.textContent = orig;
       }
     } catch (err) {
-      log.textContent = '✗ ' + err.message;
+      log.textContent += '\n✗ ' + err.message;
       showToast(`Error: ${err.message}`, 'error', 8000);
       btn.disabled = false;
       btn.textContent = orig;
+    }
+    if (!success) {
+      progressFill.style.background = 'var(--danger, #ef4444)';
     }
   }
 

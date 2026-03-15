@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Status represents the install state of an add-on on a cluster.
@@ -297,6 +298,25 @@ func Detect(kubeCtx string, a Addon) Entry {
 	return e
 }
 
+// printProgress renders an in-place progress bar on the current terminal line.
+// \r rewrites the line; \033[K clears any leftover characters.  When pct==100
+// a newline is emitted to "commit" the final line.
+func printProgress(pct int, label string) {
+	const width = 30
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	filled := width * pct / 100
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	fmt.Printf("\r  [%s] %3d%%  %s\033[K", bar, pct, label)
+	if pct >= 100 {
+		fmt.Println()
+	}
+}
+
 // Install adds the Helm repo, updates it, creates the namespace, and runs
 // `helm upgrade --install` for the given add-on.  All helm output is streamed
 // directly to the caller's stdout/stderr so progress is visible interactively.
@@ -347,26 +367,27 @@ func Install(kubeCtx string, a Addon) error {
 	}
 
 	// ── Step 1: add helm repo ─────────────────────────────────────────────
-	fmt.Printf("\n  Adding Helm repo %s …\n", a.RepoName)
+	printProgress(5, "Adding Helm repo "+a.RepoName+"…")
 	repoAddArgs := []string{"repo", "add", a.RepoName, a.RepoURL, "--force-update"}
 	if out, err := exec.Command("helm", repoAddArgs...).CombinedOutput(); err != nil {
+		fmt.Println()
 		return fmt.Errorf("helm repo add: %s", strings.TrimSpace(string(out)))
 	}
 
 	// ── Step 2: update repos ──────────────────────────────────────────────
-	fmt.Printf("  Updating Helm repos …\n")
+	printProgress(12, "Updating Helm repos…")
 	if out, err := exec.Command("helm", "repo", "update").CombinedOutput(); err != nil {
+		fmt.Println()
 		return fmt.Errorf("helm repo update: %s", strings.TrimSpace(string(out)))
 	}
 
 	// ── Step 3: ensure namespace exists ──────────────────────────────────
-	fmt.Printf("  Ensuring namespace %q exists …\n", a.Namespace)
+	printProgress(18, "Ensuring namespace "+a.Namespace+"…")
 	nsArgs := []string{"create", "namespace", a.Namespace}
 	if kubeCtx != "" {
 		nsArgs = append(nsArgs, "--context", kubeCtx)
 	}
-	// Ignore error — namespace may already exist.
-	_ = exec.Command("kubectl", nsArgs...).Run()
+	_ = exec.Command("kubectl", nsArgs...).Run() // ignore error — may already exist
 
 	// ── Step 3.5: disable sibling's Grafana BEFORE installing ────────────
 	// Must run before our install so our Grafana doesn't start up and pick up
@@ -375,7 +396,7 @@ func Install(kubeCtx string, a Addon) error {
 	siblingReconfigured := false
 	if a.ReconfigureSiblingID != "" {
 		if sib, ok := ByID(a.ReconfigureSiblingID); ok && isReleaseInstalled(kubeCtx, sib.Release) {
-			fmt.Printf("\n  ℹ  %s detected — disabling its Grafana before installing to prevent datasource conflicts …\n", sib.Name)
+			printProgress(28, "Disabling "+sib.Name+" Grafana to prevent conflicts…")
 			upArgs := []string{
 				"upgrade", sib.Release, sib.Chart,
 				"--namespace", sib.Namespace,
@@ -386,10 +407,7 @@ func Install(kubeCtx string, a Addon) error {
 			if kubeCtx != "" {
 				upArgs = append(upArgs, "--kube-context", kubeCtx)
 			}
-			upCmd := exec.Command("helm", upArgs...)
-			upCmd.Stdout = os.Stdout
-			upCmd.Stderr = os.Stderr
-			_ = upCmd.Run() // best-effort
+			_, _ = exec.Command("helm", upArgs...).CombinedOutput() // best-effort
 			siblingReconfigured = true
 
 			// Also add the sibling's data service as a non-default datasource
@@ -407,7 +425,12 @@ func Install(kubeCtx string, a Addon) error {
 	}
 
 	// ── Step 4: helm upgrade --install ────────────────────────────────────
-	fmt.Printf("  Installing %s (this may take a few minutes) …\n\n", a.Name)
+	helmStartPct := 25
+	if siblingReconfigured {
+		helmStartPct = 32
+	}
+	printProgress(helmStartPct, "Installing "+a.Name+" (this may take a few minutes)…")
+
 	installArgs := []string{
 		"upgrade", "--install", a.Release, a.Chart,
 		"--namespace", a.Namespace,
@@ -420,19 +443,47 @@ func Install(kubeCtx string, a Addon) error {
 		installArgs = append(installArgs, "--kube-context", kubeCtx)
 	}
 
-	cmd := exec.Command("helm", installArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	type helmResult struct {
+		out []byte
+		err error
+	}
+	helmDone := make(chan helmResult, 1)
+	go func() {
+		out, err := exec.Command("helm", installArgs...).CombinedOutput()
+		helmDone <- helmResult{out, err}
+	}()
+
+	cur := helmStartPct
+	ticker := time.NewTicker(9 * time.Second)
+	var hRes helmResult
+helmLoop:
+	for {
+		select {
+		case hRes = <-helmDone:
+			break helmLoop
+		case <-ticker.C:
+			cur += 4
+			if cur > 84 {
+				cur = 84
+			}
+			printProgress(cur, "Installing "+a.Name+"…")
+		}
+	}
+	ticker.Stop()
+
+	if hRes.err != nil {
+		fmt.Println()
+		fmt.Print(string(hRes.out))
 		return fmt.Errorf("helm install failed (see output above)")
 	}
+	printProgress(88, "✓ "+a.Name+" installed")
 
 	// ── Step 5: add this stack's datasource to the sibling's Grafana ────────
 	// When this addon's Grafana is disabled (sibling provides it), upgrade the
 	// sibling to expose this stack's data as a non-default datasource.
 	if grafanaDisabledBy != "" && a.ID == "loki-stack" {
 		if prom, ok := ByID("kube-prometheus-stack"); ok {
-			fmt.Printf("\n  ℹ  Adding Loki datasource to the shared Grafana …\n")
+			printProgress(94, "Adding Loki datasource to shared Grafana…")
 			upArgs := []string{
 				"upgrade", prom.Release, prom.Chart,
 				"--namespace", prom.Namespace,
@@ -447,13 +498,12 @@ func Install(kubeCtx string, a Addon) error {
 			if kubeCtx != "" {
 				upArgs = append(upArgs, "--kube-context", kubeCtx)
 			}
-			upCmd := exec.Command("helm", upArgs...)
-			upCmd.Stdout = os.Stdout
-			upCmd.Stderr = os.Stderr
-			_ = upCmd.Run() // best-effort
+			_, _ = exec.Command("helm", upArgs...).CombinedOutput() // best-effort
 		}
 	}
 	_ = siblingReconfigured // already done in Step 3.5
+
+	printProgress(100, "✓ Done")
 
 	// ── Step 6: print Grafana access hint ────────────────────────────────
 	printGrafanaHint(kubeCtx, a, grafanaDisabledBy)
