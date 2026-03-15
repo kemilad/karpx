@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -31,6 +32,69 @@ import (
 
 //go:embed static/index.html
 var staticFiles embed.FS
+
+// ── Grafana port-forward manager ─────────────────────────────────────────────
+// Tracks the one kubectl port-forward process managed by karpx so we can
+// reuse it or replace it when the user clicks the Grafana button.
+var (
+	pfMu      sync.Mutex
+	pfProcess *os.Process // nil when no port-forward is running
+)
+
+// isPortListening returns true when something is accepting TCP connections on
+// localhost:<port> (checked with a short dial timeout).
+func isPortListening(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// startGrafanaPortForward starts kubectl port-forward for the given service and
+// waits (up to 15 s) until port 3000 is ready.  If port 3000 is already in use
+// it returns immediately.  A previously managed port-forward is killed first.
+func startGrafanaPortForward(kubeCtx, namespace, svc string) error {
+	const localPort = 3000
+
+	if isPortListening(localPort) {
+		return nil // already forwarding (or something else on port 3000)
+	}
+
+	// Kill any port-forward we previously started.
+	pfMu.Lock()
+	if pfProcess != nil {
+		_ = pfProcess.Kill()
+		pfProcess = nil
+	}
+	pfMu.Unlock()
+
+	args := []string{"port-forward", "-n", namespace, "svc/" + svc, fmt.Sprintf("%d:80", localPort)}
+	if kubeCtx != "" {
+		args = append(args, "--context", kubeCtx)
+	}
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("kubectl port-forward failed to start: %w", err)
+	}
+
+	pfMu.Lock()
+	pfProcess = cmd.Process
+	pfMu.Unlock()
+
+	// Wait up to 15 s for the port to become available.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(400 * time.Millisecond)
+		if isPortListening(localPort) {
+			return nil
+		}
+	}
+	return fmt.Errorf("timed out waiting for port-forward to become ready on :%d", localPort)
+}
 
 // ClusterStatus is the JSON payload returned by /api/clusters.
 type ClusterStatus struct {
@@ -1061,6 +1125,56 @@ func Serve(port int, kubeCtx string) error {
 		}
 		addStep(fmt.Sprintf("✓ %s uninstalled", a.Name))
 		json.NewEncoder(w).Encode(InstallResponse{Success: true, Steps: steps})
+	})
+
+	// ── Grafana port-forward ──────────────────────────────────────────────────
+	// POST /api/addons/grafana-portforward
+	// Starts (or reuses) a kubectl port-forward to the addon's Grafana service
+	// on localhost:3000, then returns once the port is ready.
+	mux.HandleFunc("/api/addons/grafana-portforward", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req AddonActionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid request body"})
+			return
+		}
+		a, ok := addons.ByID(req.AddonID)
+		if !ok {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unknown add-on: " + req.AddonID})
+			return
+		}
+
+		// Resolve effective Grafana service (shared-Grafana: prefer sibling's svc).
+		grafanaSvc := a.GrafanaSvc
+		grafanaNS := a.Namespace
+		if grafanaSvc == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "this add-on does not provide a Grafana service"})
+			return
+		}
+		for _, rel := range a.DisableGrafanaIfReleases {
+			if addons.IsReleaseInstalled(req.Context, rel) {
+				for _, other := range addons.Registry() {
+					if other.Release == rel && other.GrafanaSvc != "" {
+						grafanaSvc = other.GrafanaSvc
+						grafanaNS = other.Namespace
+						break
+					}
+				}
+				break
+			}
+		}
+
+		if err := startGrafanaPortForward(req.Context, grafanaNS, grafanaSvc); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "url": "http://localhost:3000"})
 	})
 
 	srv := &http.Server{
