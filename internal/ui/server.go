@@ -68,10 +68,12 @@ type VersionsResponse struct {
 
 // InstallResponse is the JSON body returned by POST /api/install and /api/upgrade.
 type InstallResponse struct {
-	Success bool     `json:"success"`
-	Output  string   `json:"output,omitempty"`
-	Steps   []string `json:"steps,omitempty"` // upgrade step log
-	Error   string   `json:"error,omitempty"`
+	Success    bool     `json:"success"`
+	Output     string   `json:"output,omitempty"`
+	Steps      []string `json:"steps,omitempty"` // upgrade step log
+	Error      string   `json:"error,omitempty"`
+	GrafanaURL string   `json:"grafana_url,omitempty"` // e.g. "http://localhost:3000"
+	GrafanaCmd string   `json:"grafana_cmd,omitempty"` // kubectl port-forward command
 }
 
 // UninstallRequest is the JSON body for POST /api/uninstall.
@@ -852,6 +854,27 @@ func Serve(port int, kubeCtx string) error {
 		var steps []string
 		addStep := func(s string) { steps = append(steps, s) }
 
+		// ── Build effective set-values (shared-Grafana + cluster name) ────
+		setValues := make([]string, len(a.SetValues))
+		copy(setValues, a.SetValues)
+
+		grafanaDisabledBy := ""
+		for _, rel := range a.DisableGrafanaIfReleases {
+			if addons.IsReleaseInstalled(req.Context, rel) {
+				setValues = addonOverrideSetValue(setValues, "grafana.enabled", "false")
+				grafanaDisabledBy = rel
+				addStep(fmt.Sprintf("ℹ  Grafana already provided by %s — skipping duplicate", rel))
+				break
+			}
+		}
+
+		if a.RequiresClusterName {
+			if cn := addonClusterName(req.Context); cn != "" {
+				setValues = append(setValues, "clusterName="+cn)
+				addStep(fmt.Sprintf("ℹ  Cluster name: %s", cn))
+			}
+		}
+
 		// Step 1: add helm repo
 		addStep(fmt.Sprintf("Adding Helm repo %s…", a.RepoName))
 		out, err := exec.CommandContext(ctx, "helm", "repo", "add", a.RepoName, a.RepoURL, "--force-update").CombinedOutput()
@@ -885,7 +908,7 @@ func Serve(port int, kubeCtx string) error {
 			"--namespace", a.Namespace,
 			"--wait", "--timeout", "9m",
 		}
-		for _, sv := range a.SetValues {
+		for _, sv := range setValues {
 			installArgs = append(installArgs, "--set", sv)
 		}
 		if req.Context != "" {
@@ -898,7 +921,56 @@ func Serve(port int, kubeCtx string) error {
 			return
 		}
 		addStep(fmt.Sprintf("✓ %s installed successfully", a.Name))
-		json.NewEncoder(w).Encode(InstallResponse{Success: true, Steps: steps})
+
+		// Step 5: reconfigure sibling to share Grafana (best-effort)
+		if a.ReconfigureSiblingID != "" {
+			if sib, sibOK := addons.ByID(a.ReconfigureSiblingID); sibOK && addons.IsReleaseInstalled(req.Context, sib.Release) {
+				addStep(fmt.Sprintf("ℹ  Upgrading %s to share Grafana…", sib.Name))
+				upArgs := []string{
+					"upgrade", sib.Release, sib.Chart,
+					"--namespace", sib.Namespace,
+					"--reuse-values", "--set", "grafana.enabled=false",
+					"--wait", "--timeout", "5m",
+				}
+				if req.Context != "" {
+					upArgs = append(upArgs, "--kube-context", req.Context)
+				}
+				upOut, upErr := exec.CommandContext(ctx, "helm", upArgs...).CombinedOutput()
+				if upErr != nil {
+					addStep("⚠ " + strings.TrimSpace(string(upOut)))
+				} else {
+					addStep(fmt.Sprintf("✓ %s reconfigured to use shared Grafana", sib.Name))
+				}
+			}
+		}
+
+		// Step 6: build Grafana access info
+		grafanaSvc := a.GrafanaSvc
+		grafanaNS := a.Namespace
+		grafanaCreds := a.GrafanaDefaultCreds
+		if grafanaDisabledBy != "" {
+			for _, addon := range addons.Registry() {
+				if addon.Release == grafanaDisabledBy && addon.GrafanaSvc != "" {
+					grafanaSvc = addon.GrafanaSvc
+					grafanaNS = addon.Namespace
+					grafanaCreds = addon.GrafanaDefaultCreds
+					break
+				}
+			}
+		}
+
+		resp := InstallResponse{Success: true, Steps: steps}
+		if grafanaSvc != "" {
+			resp.GrafanaURL = "http://localhost:3000"
+			resp.GrafanaCmd = fmt.Sprintf("kubectl port-forward -n %s svc/%s 3000:80", grafanaNS, grafanaSvc)
+			if req.Context != "" {
+				resp.GrafanaCmd += " --context " + req.Context
+			}
+			if grafanaCreds != "" {
+				resp.GrafanaCmd += "\n# credentials: " + grafanaCreds
+			}
+		}
+		json.NewEncoder(w).Encode(resp)
 	})
 
 	// ── Add-on uninstall ─────────────────────────────────────────────────────
@@ -1125,4 +1197,32 @@ func openBrowser(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	_ = cmd.Start()
+}
+
+// addonOverrideSetValue replaces key=<old> with key=<new> in a set-values slice,
+// or appends key=value if the key is not present.
+func addonOverrideSetValue(setValues []string, key, value string) []string {
+	prefix := key + "="
+	result := make([]string, len(setValues))
+	copy(result, setValues)
+	for i, sv := range result {
+		if strings.HasPrefix(sv, prefix) {
+			result[i] = key + "=" + value
+			return result
+		}
+	}
+	return append(result, key+"="+value)
+}
+
+// addonClusterName derives a bare cluster name from a kubeconfig context string.
+// EKS ARN format: "arn:aws:eks:<region>:<account>:cluster/<name>" → "<name>"
+// Otherwise the context string itself is returned.
+func addonClusterName(kubeCtx string) string {
+	if kubeCtx == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(kubeCtx, ":cluster/"); idx >= 0 {
+		return kubeCtx[idx+9:]
+	}
+	return kubeCtx
 }

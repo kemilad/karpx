@@ -168,6 +168,11 @@ type helmRelease struct {
 	AppVersion string `json:"app_version"`
 }
 
+// IsReleaseInstalled reports whether a named Helm release is currently deployed.
+func IsReleaseInstalled(kubeCtx, releaseName string) bool {
+	return isReleaseInstalled(kubeCtx, releaseName)
+}
+
 // isReleaseInstalled reports whether a named Helm release is currently deployed.
 func isReleaseInstalled(kubeCtx, releaseName string) bool {
 	args := []string{"list", "--all-namespaces", "--output", "json"}
