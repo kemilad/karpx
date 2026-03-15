@@ -1,5 +1,5 @@
 class Karpx < Formula
-  desc "⚡ Karpenter for EKS — managed from your terminal"
+  desc "⚡ The Kubernetes essentials toolkit"
   homepage "https://github.com/kemilad/karpx"
   version "0.1.0"
   license "Apache-2.0"

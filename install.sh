@@ -33,7 +33,7 @@ banner() {
   printf "${VIOLET}${BOLD}  ██║  ██╗██║  ██║██║  ██║██║     ██╔╝ ██╗${RESET}\n"
   printf "${VIOLET}${BOLD}  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝${RESET}\n"
   printf "\n"
-  printf "${CYAN}  ⚡ Karpenter for EKS — managed from your terminal${RESET}\n"
+  printf "${CYAN}  ⚡ The Kubernetes essentials toolkit${RESET}\n"
   printf "${GRAY}  https://github.com/${REPO}${RESET}\n"
   printf "\n"
 }
