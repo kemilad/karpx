@@ -1941,6 +1941,7 @@
             success = evt.success;
             if (evt.success) {
               setProgress(100, '✓ Done');
+              setTimeout(() => { progressWrap.style.display = 'none'; }, 1500);
               showToast(`✓ ${addonId} installed successfully`, 'success', 6000);
               if (evt.grafana_url) {
                 const box = document.getElementById('grafana-url-box');
@@ -1966,6 +1967,7 @@
     }
     if (!success) {
       progressFill.style.background = 'var(--danger, #ef4444)';
+      setTimeout(() => { progressWrap.style.display = 'none'; }, 3000);
     }
   }
 
