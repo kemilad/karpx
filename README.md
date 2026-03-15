@@ -94,6 +94,7 @@ Stop it with `Ctrl+C`.
 | `i` | Install Karpenter on selected cluster |
 | `u` | Upgrade Karpenter on selected cluster |
 | `n` | Manage NodePools / EC2NodeClasses |
+| `a` | Open Add-ons panel for selected cluster |
 | `r` | Refresh cluster list |
 | `Esc` | Go back |
 | `q` | Quit |
@@ -137,6 +138,56 @@ karpx nodes -c my-cluster                    # interactive: analyse + ask + appl
 karpx nodes -c my-cluster --mode cost        # skip the question, use cost-optimised
 karpx nodes -c my-cluster --mode freetier    # free-tier eligible instances only
 ```
+
+### Open-source add-ons
+
+karpx includes a built-in add-ons manager to install, inspect, and remove popular
+open-source tools into any cluster via Helm — no separate `helm add repo` or
+`kubectl apply` commands needed.
+
+#### Available add-ons
+
+| ID | Name | Category | What it does |
+|----|------|----------|-------------|
+| `loki-stack` | Logging Stack | Logging | Grafana + Loki + Promtail — log aggregation and live exploration |
+| `kube-prometheus-stack` | Monitoring Stack | Monitoring | Grafana + Prometheus + Node Exporter — metrics and dashboards |
+| `keda` | KEDA | Autoscaling | Kubernetes Event-Driven Autoscaling — scale on queues, topics, and more |
+| `cert-manager` | cert-manager | Security | Automatic TLS certificate provisioning via Let's Encrypt / ACME |
+
+#### CLI usage
+
+```bash
+# List all add-ons and their status on a cluster
+karpx addons list -c my-cluster
+
+# Install an add-on
+karpx addons install loki-stack -c my-cluster
+karpx addons install kube-prometheus-stack -c my-cluster
+karpx addons install keda -c my-cluster
+karpx addons install cert-manager -c my-cluster
+
+# Uninstall an add-on
+karpx addons uninstall loki-stack -c my-cluster
+```
+
+#### TUI usage
+
+From the cluster list, press `a` to open the **Add-ons** panel for the selected cluster.
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` / `j` `k` | Move between add-ons |
+| `i` | Install selected add-on |
+| `x` | Uninstall selected add-on |
+| `r` | Refresh add-on status |
+| `Esc` | Go back |
+
+Each add-on row shows its name, category, description, installed version (if any),
+and a status badge (`● INSTALLED` / `○ NOT INSTALLED`). Selecting a row reveals a
+detail panel with the Helm chart reference, target namespace, and release name.
+
+Install uses `helm upgrade --install` with `--wait` (10 min timeout), so progress
+streams live to your terminal and the command exits with a non-zero status on failure.
 
 ### Non-interactive (CI / scripting)
 
@@ -184,6 +235,18 @@ karpx np -c my-cluster          # short alias
 
 # Print karpx version.
 karpx version
+
+# List add-ons and their install status.
+karpx addons list -c my-cluster
+
+# Install an add-on (streams helm output; exits non-zero on failure).
+karpx addons install loki-stack          -c my-cluster
+karpx addons install kube-prometheus-stack -c my-cluster
+karpx addons install keda                -c my-cluster
+karpx addons install cert-manager        -c my-cluster
+
+# Uninstall an add-on.
+karpx addons uninstall loki-stack -c my-cluster
 ```
 
 ### Provider detection
