@@ -647,6 +647,24 @@
       padding: 0.8rem 1rem; font-size: 0.75rem; font-family: var(--mono);
       max-height: 220px; overflow-y: auto; white-space: pre-wrap; line-height: 1.7;
     }
+    .grafana-url-box {
+      display: none; margin-top: 0.75rem;
+      background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px;
+      padding: 0.85rem 1rem;
+    }
+    .grafana-url-box .grafana-label {
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+      color: var(--success); text-transform: uppercase; margin-bottom: 0.4rem;
+    }
+    .grafana-url-box .grafana-link {
+      display: inline-block; font-size: 1rem; font-weight: 700;
+      color: var(--success); text-decoration: none; margin-bottom: 0.45rem;
+    }
+    .grafana-url-box .grafana-link:hover { text-decoration: underline; }
+    .grafana-url-box .grafana-cmd {
+      font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+      white-space: pre-wrap; line-height: 1.6;
+    }
   </style>
 </head>
 <body>
@@ -887,6 +905,11 @@
     </div>
 
     <div class="addons-log" id="addons-log"></div>
+    <div class="grafana-url-box" id="grafana-url-box">
+      <div class="grafana-label">Grafana ready</div>
+      <a class="grafana-link" id="grafana-url-link" href="http://localhost:3000" target="_blank">http://localhost:3000</a>
+      <div class="grafana-cmd" id="grafana-url-cmd"></div>
+    </div>
   </div>
 </div>
 
@@ -1731,6 +1754,7 @@
     document.getElementById('addons-modal-ctx').textContent = 'Cluster: ' + clusterLabel;
     document.getElementById('addons-log').style.display = 'none';
     document.getElementById('addons-log').textContent = '';
+    document.getElementById('grafana-url-box').style.display = 'none';
     document.getElementById('addons-table-wrap').innerHTML =
       '<span style="color:var(--muted);font-size:0.78rem"><span class="spinner" style="width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:0.4rem"></span>Checking add-on status…</span>';
     document.getElementById('addons-modal').classList.add('open');
@@ -1813,6 +1837,15 @@
       log.textContent = (result.steps || []).join('\n') || result.error || '';
       if (result.success) {
         showToast(`✓ ${addonId} installed successfully`, 'success', 6000);
+        if (result.grafana_url) {
+          const box = document.getElementById('grafana-url-box');
+          const link = document.getElementById('grafana-url-link');
+          const cmdEl = document.getElementById('grafana-url-cmd');
+          link.href = result.grafana_url;
+          link.textContent = result.grafana_url;
+          cmdEl.textContent = result.grafana_cmd || '';
+          box.style.display = 'block';
+        }
         await loadAddons(_addonsCtx);
       } else {
         showToast(`Install failed: ${result.error || 'unknown error'}`, 'error', 10000);
