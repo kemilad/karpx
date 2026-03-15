@@ -1417,19 +1417,26 @@ func addonsCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "addons",
-		Short: "Manage optional open-source add-ons (Grafana, Loki, Prometheus, KEDA, cert-manager)",
+		Short: "Manage optional open-source add-ons (Grafana, Loki, Prometheus, AWS LBC, KEDA, cert-manager)",
 		Long: `
   Manage optional add-ons for your Kubernetes cluster.
 
   Available add-ons:
-    loki-stack             Grafana + Loki + Promtail   (log aggregation)
-    kube-prometheus-stack  Grafana + Prometheus + Node Exporter  (metrics)
-    keda                   Kubernetes Event-Driven Autoscaling
-    cert-manager           Automatic TLS certificate provisioning and renewal
+    loki-stack                    Loki + Promtail + Grafana   (log aggregation)
+    kube-prometheus-stack         Grafana + Prometheus + Node Exporter  (metrics)
+    aws-load-balancer-controller  AWS ALB/NLB for Services and Ingresses
+    keda                          Kubernetes Event-Driven Autoscaling
+    cert-manager                  Automatic TLS certificate provisioning and renewal
+
+  Shared Grafana: if both loki-stack and kube-prometheus-stack are installed,
+  karpx automatically disables the duplicate Grafana so only one instance runs.
+  A port-forward command and URL are printed after every observability install.
 
   Examples:
     karpx addons list
     karpx addons install loki-stack -c my-cluster
+    karpx addons install kube-prometheus-stack -c my-cluster
+    karpx addons install aws-load-balancer-controller -c my-cluster
     karpx addons uninstall cert-manager -c my-cluster
 `,
 	}
