@@ -1,6 +1,6 @@
 # karpx ⚡
 
-> Karpenter — managed from your terminal
+> ⚡ The Kubernetes essentials toolkit
 
 ```
   ██╗  ██╗ █████╗ ██████╗ ██████╗ ██╗  ██╗
