@@ -156,6 +156,8 @@ type AddonStatusEntry struct {
 	Status      string `json:"status"` // "installed" | "not_installed" | "error"
 	Version     string `json:"version,omitempty"`
 	Error       string `json:"error,omitempty"`
+	GrafanaURL  string `json:"grafana_url,omitempty"` // set when addon provides/shares Grafana
+	GrafanaCmd  string `json:"grafana_cmd,omitempty"` // kubectl port-forward command
 }
 
 // AddonActionRequest is the JSON body for POST /api/addons/install and /api/addons/uninstall.
@@ -803,27 +805,74 @@ func Serve(port int, kubeCtx string) error {
 
 		kubeCtxParam := r.URL.Query().Get("context")
 		catalog := addons.Registry()
-		entries := make([]AddonStatusEntry, len(catalog))
+
+		// Detect all addons and track which releases are installed.
+		type detected struct {
+			addon  addons.Addon
+			entry  addons.Entry
+			status string
+		}
+		rows := make([]detected, len(catalog))
+		installedByRelease := map[string]bool{}
 		for i, a := range catalog {
 			e := addons.Detect(kubeCtxParam, a)
 			status := "not_installed"
 			switch e.Status {
 			case addons.StatusInstalled:
 				status = "installed"
+				installedByRelease[a.Release] = true
 			case addons.StatusError:
 				status = "error"
 			}
-			entries[i] = AddonStatusEntry{
+			rows[i] = detected{addon: a, entry: e, status: status}
+		}
+
+		// Build response entries, computing Grafana URLs where applicable.
+		entries := make([]AddonStatusEntry, len(catalog))
+		for i, d := range rows {
+			a := d.addon
+			se := AddonStatusEntry{
 				ID:          a.ID,
 				Name:        a.Name,
 				Description: a.Description,
 				Category:    a.Category,
 				Release:     a.Release,
 				Namespace:   a.Namespace,
-				Status:      status,
-				Version:     e.InstalledVersion,
-				Error:       e.Error,
+				Status:      d.status,
+				Version:     d.entry.InstalledVersion,
+				Error:       d.entry.Error,
 			}
+
+			// Attach Grafana URL for any installed addon that has a Grafana service.
+			if d.status == "installed" && a.GrafanaSvc != "" {
+				grafanaSvc := a.GrafanaSvc
+				grafanaNS := a.Namespace
+				grafanaCreds := a.GrafanaDefaultCreds
+				// If another release provides Grafana (shared-Grafana scenario), use that one.
+				for _, rel := range a.DisableGrafanaIfReleases {
+					if installedByRelease[rel] {
+						for _, other := range catalog {
+							if other.Release == rel && other.GrafanaSvc != "" {
+								grafanaSvc = other.GrafanaSvc
+								grafanaNS = other.Namespace
+								grafanaCreds = other.GrafanaDefaultCreds
+								break
+							}
+						}
+						break
+					}
+				}
+				pfCmd := fmt.Sprintf("kubectl port-forward -n %s svc/%s 3000:80", grafanaNS, grafanaSvc)
+				if kubeCtxParam != "" {
+					pfCmd += " --context " + kubeCtxParam
+				}
+				se.GrafanaURL = "http://localhost:3000"
+				se.GrafanaCmd = pfCmd
+				if grafanaCreds != "" {
+					se.GrafanaCmd += "\n# credentials: " + grafanaCreds
+				}
+			}
+			entries[i] = se
 		}
 		json.NewEncoder(w).Encode(entries)
 	})
