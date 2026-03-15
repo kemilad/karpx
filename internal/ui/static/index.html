@@ -1808,8 +1808,9 @@
         actionHtml = `<button class="btn-addon-install" onclick="doAddonInstall('${esc(a.id)}', this)">Install</button>`;
       }
       if (a.grafana_url) {
-        urlHtml = `<a class="addon-grafana-link" href="${esc(a.grafana_url)}" target="_blank"
-          title="${esc(a.grafana_cmd || '')}">📊 Grafana</a>`;
+        urlHtml = `<a class="addon-grafana-link" href="#"
+          onclick="openGrafana(event,'${esc(a.id)}','${esc(a.grafana_url)}')"
+          title="Click to start port-forward and open Grafana&#10;${esc(a.grafana_cmd || '')}">📊 Grafana</a>`;
       } else {
         urlHtml = `<span style="color:var(--muted);font-size:0.72rem">—</span>`;
       }
@@ -1829,6 +1830,32 @@
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
+  }
+
+  async function openGrafana(event, addonId, url) {
+    event.preventDefault();
+    const el = event.currentTarget;
+    const origHtml = el.innerHTML;
+    el.innerHTML = '<span class="spinner" style="width:8px;height:8px;border-width:1.5px;vertical-align:middle;margin-right:3px"></span>Starting…';
+    el.style.pointerEvents = 'none';
+    try {
+      const resp = await fetch('/api/addons/grafana-portforward', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _addonsCtx, addon_id: addonId }),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        window.open(result.url || url, '_blank');
+      } else {
+        showToast('Could not start port-forward: ' + (result.error || 'unknown error'), 'error', 8000);
+      }
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error', 8000);
+    } finally {
+      el.innerHTML = origHtml;
+      el.style.pointerEvents = '';
+    }
   }
 
   async function doAddonInstall(addonId, btn) {
