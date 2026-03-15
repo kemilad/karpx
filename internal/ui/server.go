@@ -1014,6 +1014,42 @@ func Serve(port int, kubeCtx string) error {
 		_ = exec.CommandContext(ctx, "kubectl", nsArgs...).Run()
 		addStep(fmt.Sprintf("✓ Namespace %q ready", a.Namespace))
 
+		// Step 3.5: disable sibling's Grafana BEFORE installing to prevent
+		// "multiple default datasources" crashloop in our Grafana.
+		siblingReconfigured := false
+		if a.ReconfigureSiblingID != "" {
+			if sib, sibOK := addons.ByID(a.ReconfigureSiblingID); sibOK && addons.IsReleaseInstalled(req.Context, sib.Release) {
+				addStep(fmt.Sprintf("ℹ  Disabling %s Grafana before install to prevent datasource conflicts…", sib.Name))
+				upArgs := []string{
+					"upgrade", sib.Release, sib.Chart,
+					"--namespace", sib.Namespace,
+					"--reuse-values", "--set", "grafana.enabled=false",
+					"--wait", "--timeout", "5m",
+				}
+				if req.Context != "" {
+					upArgs = append(upArgs, "--kube-context", req.Context)
+				}
+				upOut, upErr := exec.CommandContext(ctx, "helm", upArgs...).CombinedOutput()
+				if upErr != nil {
+					addStep("⚠ " + strings.TrimSpace(string(upOut)))
+				} else {
+					addStep(fmt.Sprintf("✓ %s Grafana disabled", sib.Name))
+				}
+				siblingReconfigured = true
+
+				// Add sibling's data service as a non-default datasource in our Grafana.
+				if sib.ID == "loki-stack" {
+					setValues = append(setValues,
+						"grafana.additionalDataSources[0].name=Loki",
+						"grafana.additionalDataSources[0].type=loki",
+						"grafana.additionalDataSources[0].url=http://loki-stack:3100",
+						"grafana.additionalDataSources[0].access=proxy",
+						"grafana.additionalDataSources[0].isDefault=false",
+					)
+				}
+			}
+		}
+
 		// Step 4: helm upgrade --install
 		addStep(fmt.Sprintf("Installing %s (this may take several minutes)…", a.Name))
 		installArgs := []string{
@@ -1035,14 +1071,21 @@ func Serve(port int, kubeCtx string) error {
 		}
 		addStep(fmt.Sprintf("✓ %s installed successfully", a.Name))
 
-		// Step 5: reconfigure sibling to share Grafana (best-effort)
-		if a.ReconfigureSiblingID != "" {
-			if sib, sibOK := addons.ByID(a.ReconfigureSiblingID); sibOK && addons.IsReleaseInstalled(req.Context, sib.Release) {
-				addStep(fmt.Sprintf("ℹ  Upgrading %s to share Grafana…", sib.Name))
+		// Step 5: add this stack's datasource to the sibling's Grafana
+		// (only needed when our Grafana is disabled because sibling provides it).
+		_ = siblingReconfigured // reconfiguration already done in Step 3.5
+		if grafanaDisabledBy != "" && a.ID == "loki-stack" {
+			if prom, promOK := addons.ByID("kube-prometheus-stack"); promOK {
+				addStep("ℹ  Adding Loki datasource to the shared Grafana…")
 				upArgs := []string{
-					"upgrade", sib.Release, sib.Chart,
-					"--namespace", sib.Namespace,
-					"--reuse-values", "--set", "grafana.enabled=false",
+					"upgrade", prom.Release, prom.Chart,
+					"--namespace", prom.Namespace,
+					"--reuse-values",
+					"--set", "grafana.additionalDataSources[0].name=Loki",
+					"--set", "grafana.additionalDataSources[0].type=loki",
+					"--set", "grafana.additionalDataSources[0].url=http://loki-stack:3100",
+					"--set", "grafana.additionalDataSources[0].access=proxy",
+					"--set", "grafana.additionalDataSources[0].isDefault=false",
 					"--wait", "--timeout", "5m",
 				}
 				if req.Context != "" {
@@ -1052,7 +1095,7 @@ func Serve(port int, kubeCtx string) error {
 				if upErr != nil {
 					addStep("⚠ " + strings.TrimSpace(string(upOut)))
 				} else {
-					addStep(fmt.Sprintf("✓ %s reconfigured to use shared Grafana", sib.Name))
+					addStep("✓ Loki datasource added to shared Grafana")
 				}
 			}
 		}
