@@ -60,6 +60,10 @@ type Addon struct {
 	// set-values, deriving the AWS region from the kubeconfig context EKS ARN.
 	RequiresRegion bool
 
+	// RequiresVPCID, when true, injects vpcId=<id> into the Helm set-values
+	// by querying the EKS cluster via the AWS CLI (avoids IMDS dependency).
+	RequiresVPCID bool
+
 	// PostInstallNotes is extra text printed after a successful install.
 	PostInstallNotes string
 }
@@ -121,6 +125,7 @@ func Registry() []Addon {
 			// clusterName is injected automatically from kubeconfig context.
 			RequiresClusterName: true,
 			RequiresRegion:      true,
+			RequiresVPCID:       true,
 			PostInstallNotes: `  ℹ  The AWS Load Balancer Controller needs an IAM role with the
   AWSLoadBalancerControllerIAMPolicy attached, annotated on its ServiceAccount:
 
@@ -240,6 +245,26 @@ func regionFromCtx(kubeCtx string) string {
 	return ""
 }
 
+// vpcIDFromCluster queries the EKS cluster via the AWS CLI to get the VPC ID.
+// This avoids the controller having to fetch it from EC2 instance metadata (IMDS).
+func vpcIDFromCluster(region, clusterName string) string {
+	if region == "" || clusterName == "" {
+		return ""
+	}
+	args := []string{
+		"eks", "describe-cluster",
+		"--region", region,
+		"--name", clusterName,
+		"--query", "cluster.resourcesVpcConfig.vpcId",
+		"--output", "text",
+	}
+	out, err := exec.Command("aws", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // Detect queries helm to determine whether an add-on is installed in a cluster.
 func Detect(kubeCtx string, a Addon) Entry {
 	e := Entry{Addon: a, Status: StatusNotInstalled}
@@ -306,6 +331,18 @@ func Install(kubeCtx string, a Addon) error {
 		if region := regionFromCtx(kubeCtx); region != "" {
 			setValues = append(setValues, "region="+region)
 			fmt.Printf("  ℹ  Detected AWS region: %s\n", region)
+		}
+	}
+
+	if a.RequiresVPCID {
+		region := regionFromCtx(kubeCtx)
+		clusterName := clusterNameFromCtx(kubeCtx)
+		fmt.Printf("  ℹ  Looking up VPC ID for cluster %q …\n", clusterName)
+		if vpcID := vpcIDFromCluster(region, clusterName); vpcID != "" {
+			setValues = append(setValues, "vpcId="+vpcID)
+			fmt.Printf("  ℹ  VPC ID: %s\n", vpcID)
+		} else {
+			fmt.Printf("  ⚠  Could not resolve VPC ID — install may fail if IMDS is unavailable\n")
 		}
 	}
 

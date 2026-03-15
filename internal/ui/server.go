@@ -995,6 +995,18 @@ func Serve(port int, kubeCtx string) error {
 			}
 		}
 
+		if a.RequiresVPCID {
+			region := addonRegion(req.Context)
+			clusterName := addonClusterName(req.Context)
+			addStep(fmt.Sprintf("ℹ  Looking up VPC ID for cluster %q…", clusterName))
+			if vpcID := addonVPCID(region, clusterName); vpcID != "" {
+				setValues = append(setValues, "vpcId="+vpcID)
+				addStep(fmt.Sprintf("ℹ  VPC ID: %s", vpcID))
+			} else {
+				addStep("⚠ Could not resolve VPC ID — install may fail if IMDS is unavailable")
+			}
+		}
+
 		// Step 1: add helm repo
 		addStep(fmt.Sprintf("Adding Helm repo %s…", a.RepoName))
 		out, err := exec.CommandContext(ctx, "helm", "repo", "add", a.RepoName, a.RepoURL, "--force-update").CombinedOutput()
@@ -1449,4 +1461,21 @@ func addonRegion(kubeCtx string) string {
 		return parts[3]
 	}
 	return ""
+}
+
+// addonVPCID queries the EKS cluster via the AWS CLI to get the VPC ID.
+func addonVPCID(region, clusterName string) string {
+	if region == "" || clusterName == "" {
+		return ""
+	}
+	out, err := exec.Command("aws", "eks", "describe-cluster",
+		"--region", region,
+		"--name", clusterName,
+		"--query", "cluster.resourcesVpcConfig.vpcId",
+		"--output", "text",
+	).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
