@@ -1,4 +1,6 @@
-# karpx ⚡
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kemilad/karpx/main/internal/ui/static/karpx-logo.svg" alt="karpx" width="400"/>
+</p>
 
 > ⚡ The Kubernetes essentials toolkit
 
