@@ -30,7 +30,7 @@ import (
 	karpupgrade "github.com/kemilad/karpx/internal/upgrade"
 )
 
-//go:embed static/index.html
+//go:embed static/index.html static/karpx-logo.svg
 var staticFiles embed.FS
 
 // ── Grafana port-forward manager ─────────────────────────────────────────────
