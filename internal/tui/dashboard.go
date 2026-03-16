@@ -118,7 +118,7 @@ func (m *DashboardModel) View() string {
 	header := StyleHeader.Width(m.width).Render(
 		"  ⚡ karpx" +
 			strings.Repeat(" ", max(0, m.width-30)) +
-			"Karpenter Manager",
+			"Kubernetes Essentials",
 	)
 	b.WriteString(header + "\n\n")
 

@@ -74,8 +74,13 @@ type Entry struct {
 	Addon
 	Status           Status
 	InstalledVersion string
-	Checking         bool
-	Error            string
+	// ActualRelease / ActualNamespace are set when an addon was installed outside
+	// karpx (different release name).  Operations that need to reference the live
+	// release (upgrade hints, etc.) should prefer these over Addon.Release/Namespace.
+	ActualRelease   string
+	ActualNamespace string
+	Checking        bool
+	Error           string
 }
 
 // Registry returns the catalog of all supported add-ons.
@@ -176,7 +181,29 @@ type helmRelease struct {
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace"`
 	Status     string `json:"status"`
+	Chart      string `json:"chart"`      // e.g. "kube-prometheus-stack-65.1.1"
 	AppVersion string `json:"app_version"`
+}
+
+// addonChartName extracts the chart name from an Addon.Chart value.
+// "prometheus-community/kube-prometheus-stack" → "kube-prometheus-stack"
+func addonChartName(chart string) string {
+	if idx := strings.LastIndex(chart, "/"); idx >= 0 {
+		return chart[idx+1:]
+	}
+	return chart
+}
+
+// releaseChartName strips the version suffix from a helm release chart field.
+// "kube-prometheus-stack-65.1.1" → "kube-prometheus-stack"
+func releaseChartName(helmChart string) string {
+	parts := strings.Split(helmChart, "-")
+	for i := len(parts) - 1; i > 0; i-- {
+		if len(parts[i]) > 0 && parts[i][0] >= '0' && parts[i][0] <= '9' {
+			return strings.Join(parts[:i], "-")
+		}
+	}
+	return helmChart
 }
 
 // IsReleaseInstalled reports whether a named Helm release is currently deployed.
@@ -288,10 +315,13 @@ func Detect(kubeCtx string, a Addon) Entry {
 		return e
 	}
 
+	wantChart := addonChartName(a.Chart)
 	for _, r := range releases {
-		if r.Name == a.Release {
+		if r.Name == a.Release || releaseChartName(r.Chart) == wantChart {
 			e.Status = StatusInstalled
 			e.InstalledVersion = r.AppVersion
+			e.ActualRelease = r.Name
+			e.ActualNamespace = r.Namespace
 			return e
 		}
 	}
