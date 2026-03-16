@@ -979,8 +979,10 @@
     const verChip = ver
       ? `<span class="version-chip">v${esc(ver)}</span>`
       : `<span class="version-chip" title="Karpenter is installed but the version could not be determined (installed outside Helm)">v?</span>`;
-    const upgrade = cluster.upgrade_available
+    const upgrade = cluster.upgrade_available && cluster.latest_compatible
       ? `<span class="upgrade-hint">▲ v${esc(cluster.latest_compatible)}</span>`
+      : cluster.upgrade_available
+      ? `<span class="upgrade-hint">▲ upgrade available</span>`
       : '';
     return verChip + upgrade;
   }
@@ -1011,19 +1013,22 @@
 
   function actionCell(cluster) {
     if (cluster.karpenter_installed) {
-      const upgradeLabel = cluster.karpenter_version
-        ? `▲ v${esc(cluster.latest_compatible)}`
-        : `▲ Upgrade to v${esc(cluster.latest_compatible)}`;
+      const latestVer = cluster.latest_compatible || '';
+      const upgradeLabel = latestVer
+        ? (cluster.karpenter_version ? `▲ v${esc(latestVer)}` : `▲ Upgrade to v${esc(latestVer)}`)
+        : `▲ Upgrade`;
       const upgradeTitle = cluster.karpenter_version
         ? ''
         : ' title="Version unknown — upgrading to latest compatible"';
-      const upgradeBtn = cluster.upgrade_available
+      const upgradeBtn = cluster.upgrade_available && latestVer
         ? `<button class="btn-upgrade"${upgradeTitle}
               data-action="upgrade"
               data-context="${esc(cluster.context)}"
-              data-version="${esc(cluster.latest_compatible)}"
+              data-version="${esc(latestVer)}"
               data-namespace="${esc(cluster.karpenter_namespace || 'karpenter')}"
               data-release="${esc(cluster.karpenter_release || 'karpenter')}">${upgradeLabel}</button>`
+        : cluster.upgrade_available
+        ? `<span class="badge badge-warn" title="Refresh to load the latest compatible version">▲ Upgrade available</span>`
         : '';
       const nodesBtn = `<button class="btn-nodes"
           data-action="nodes"
