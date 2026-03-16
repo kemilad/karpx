@@ -99,11 +99,16 @@ func Registry() []Addon {
 			SetValues: []string{
 				"grafana.enabled=true",
 				"promtail.enabled=true",
-				// Provision a Loki logs-explorer dashboard from Grafana.com at startup.
+				// Provision Loki + Promtail dashboards from Grafana.com at startup.
+				// 13639 = Loki Logs Explorer (browse & search logs)
+				// 15443 = Promtail 2.x (scrape targets, bytes/s, entry rate per pod)
 				"grafana.sidecar.dashboards.enabled=true",
 				"grafana.dashboards.default.loki-logs.gnetId=13639",
 				"grafana.dashboards.default.loki-logs.revision=2",
 				"grafana.dashboards.default.loki-logs.datasource=Loki",
+				"grafana.dashboards.default.promtail.gnetId=15443",
+				"grafana.dashboards.default.promtail.revision=6",
+				"grafana.dashboards.default.promtail.datasource=Prometheus",
 			},
 			// When kube-prometheus-stack is already installed, skip the duplicate Grafana.
 			DisableGrafanaIfReleases: []string{"kube-prometheus-stack"},
@@ -462,6 +467,9 @@ func Install(kubeCtx string, a Addon) error {
 					"grafana.dashboards.default.loki-logs.gnetId=13639",
 					"grafana.dashboards.default.loki-logs.revision=2",
 					"grafana.dashboards.default.loki-logs.datasource=Loki",
+					"grafana.dashboards.default.promtail.gnetId=15443",
+					"grafana.dashboards.default.promtail.revision=6",
+					"grafana.dashboards.default.promtail.datasource=Prometheus",
 				)
 			}
 		}
@@ -558,6 +566,9 @@ helmLoop:
 				"--set", "grafana.dashboards.default.loki-logs.gnetId=13639",
 				"--set", "grafana.dashboards.default.loki-logs.revision=2",
 				"--set", "grafana.dashboards.default.loki-logs.datasource=Loki",
+				"--set", "grafana.dashboards.default.promtail.gnetId=15443",
+				"--set", "grafana.dashboards.default.promtail.revision=6",
+				"--set", "grafana.dashboards.default.promtail.datasource=Prometheus",
 				"--wait", "--timeout", "5m",
 			}
 			if kubeCtx != "" {
