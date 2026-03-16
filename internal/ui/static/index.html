@@ -44,15 +44,13 @@
     .logo {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
-      font-family: var(--mono);
-      font-size: 1.2rem;
-      font-weight: 700;
-      color: var(--violet-lt);
-      letter-spacing: 0.04em;
     }
 
-    .logo-bolt { color: var(--cyan); font-size: 1.4rem; }
+    .logo img {
+      height: 36px;
+      width: auto;
+      display: block;
+    }
 
     .header-right {
       display: flex;
@@ -693,8 +691,7 @@
 
 <header>
   <div class="logo">
-    <span class="logo-bolt">⚡</span>
-    karpx
+    <img src="karpx-logo.svg" alt="karpx — The Kubernetes Essentials Toolkit">
   </div>
   <div class="header-right">
     <span class="refresh-info" id="last-updated">—</span>
