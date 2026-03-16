@@ -96,7 +96,15 @@ func Registry() []Addon {
 			Chart:       "grafana/loki-stack",
 			Namespace:   "monitoring",
 			Release:     "loki-stack",
-			SetValues:   []string{"grafana.enabled=true", "promtail.enabled=true"},
+			SetValues: []string{
+				"grafana.enabled=true",
+				"promtail.enabled=true",
+				// Provision a Loki logs-explorer dashboard from Grafana.com at startup.
+				"grafana.sidecar.dashboards.enabled=true",
+				"grafana.dashboards.default.loki-logs.gnetId=13639",
+				"grafana.dashboards.default.loki-logs.revision=2",
+				"grafana.dashboards.default.loki-logs.datasource=Loki",
+			},
 			// When kube-prometheus-stack is already installed, skip the duplicate Grafana.
 			DisableGrafanaIfReleases: []string{"kube-prometheus-stack"},
 			GrafanaSvc:               "loki-stack-grafana",
@@ -441,7 +449,8 @@ func Install(kubeCtx string, a Addon) error {
 			siblingReconfigured = true
 
 			// Also add the sibling's data service as a non-default datasource
-			// in this addon's Grafana so data remains visible after install.
+			// in this addon's Grafana so data remains visible after install,
+			// and provision the Loki logs dashboard in the shared Grafana.
 			if sib.ID == "loki-stack" {
 				setValues = append(setValues,
 					"grafana.additionalDataSources[0].name=Loki",
@@ -449,6 +458,10 @@ func Install(kubeCtx string, a Addon) error {
 					"grafana.additionalDataSources[0].url=http://loki-stack:3100",
 					"grafana.additionalDataSources[0].access=proxy",
 					"grafana.additionalDataSources[0].isDefault=false",
+					"grafana.sidecar.dashboards.enabled=true",
+					"grafana.dashboards.default.loki-logs.gnetId=13639",
+					"grafana.dashboards.default.loki-logs.revision=2",
+					"grafana.dashboards.default.loki-logs.datasource=Loki",
 				)
 			}
 		}
@@ -541,6 +554,10 @@ helmLoop:
 				"--set", "grafana.additionalDataSources[0].url=http://loki-stack:3100",
 				"--set", "grafana.additionalDataSources[0].access=proxy",
 				"--set", "grafana.additionalDataSources[0].isDefault=false",
+				"--set", "grafana.sidecar.dashboards.enabled=true",
+				"--set", "grafana.dashboards.default.loki-logs.gnetId=13639",
+				"--set", "grafana.dashboards.default.loki-logs.revision=2",
+				"--set", "grafana.dashboards.default.loki-logs.datasource=Loki",
 				"--wait", "--timeout", "5m",
 			}
 			if kubeCtx != "" {

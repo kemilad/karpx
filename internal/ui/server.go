@@ -1088,6 +1088,10 @@ func Serve(port int, kubeCtx string) error {
 						"grafana.additionalDataSources[0].url=http://loki-stack:3100",
 						"grafana.additionalDataSources[0].access=proxy",
 						"grafana.additionalDataSources[0].isDefault=false",
+						"grafana.sidecar.dashboards.enabled=true",
+						"grafana.dashboards.default.loki-logs.gnetId=13639",
+						"grafana.dashboards.default.loki-logs.revision=2",
+						"grafana.dashboards.default.loki-logs.datasource=Loki",
 					)
 				}
 			}
@@ -1181,6 +1185,10 @@ func Serve(port int, kubeCtx string) error {
 					"--set", "grafana.additionalDataSources[0].url=http://loki-stack:3100",
 					"--set", "grafana.additionalDataSources[0].access=proxy",
 					"--set", "grafana.additionalDataSources[0].isDefault=false",
+					"--set", "grafana.sidecar.dashboards.enabled=true",
+					"--set", "grafana.dashboards.default.loki-logs.gnetId=13639",
+					"--set", "grafana.dashboards.default.loki-logs.revision=2",
+					"--set", "grafana.dashboards.default.loki-logs.datasource=Loki",
 					"--wait", "--timeout", "5m",
 				}
 				if req.Context != "" {
@@ -1190,7 +1198,7 @@ func Serve(port int, kubeCtx string) error {
 				if upErr != nil {
 					sendStep("⚠ "+strings.TrimSpace(string(upOut)), 94)
 				} else {
-					sendStep("✓ Loki datasource added to shared Grafana", 94)
+					sendStep("✓ Loki datasource and dashboard added to shared Grafana", 94)
 				}
 			}
 		}
@@ -1451,8 +1459,8 @@ func inspectContext(ctx string) ClusterStatus {
 				}
 			} else {
 				// Version unknown (installed outside Helm without a readable image tag).
-				// Recommend upgrading to the latest compatible version.
-				s.UpgradeAvailable = latest != ""
+				// Always recommend upgrading — we cannot determine if it's current.
+				s.UpgradeAvailable = true
 			}
 			if latest != "" {
 				s.LatestCompatible = latest
