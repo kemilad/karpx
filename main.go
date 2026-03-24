@@ -1005,6 +1005,27 @@ func runNodeRecommendationWithMode(kubeCtx string, provider kube.Provider, mode 
 		fmt.Printf("    • %s\n", r)
 	}
 
+	// ── Cost estimate ──────────────────────────────────────────────────────
+	c := rec.Cost
+	if c.EstimatedNodes > 0 {
+		fmt.Println()
+		printSection("Estimated cost")
+		fmt.Println()
+		fmt.Printf("  Primary instance  : %s  (%d vCPU, %.0f GiB RAM)\n",
+			c.PrimaryType, c.VCPUs, c.MemGiB)
+		fmt.Printf("  Estimated nodes   : %d  (based on current workload + 20%% headroom)\n",
+			c.EstimatedNodes)
+		fmt.Println()
+		fmt.Printf("  On-demand         : $%.4f/hr per node   ~$%.0f/mo total\n",
+			c.OnDemandPerNodeHr, c.OnDemandMonthlyUSD)
+		if c.HasSpot {
+			fmt.Printf("  Spot (typical)    : $%.4f/hr per node   ~$%.0f/mo total   (saves ~%d%%)\n",
+				c.SpotPerNodeHr, c.SpotMonthlyUSD, c.SpotSavingsPct)
+		}
+		fmt.Println()
+		fmt.Printf("  Note: %s\n", c.Note)
+	}
+
 	return &rec
 }
 

@@ -215,6 +215,19 @@ type RecommendResponse struct {
 	Capacities []string `json:"capacities"`
 	Archs      []string `json:"architectures"`
 	Error      string   `json:"error,omitempty"`
+
+	// Cost estimate fields (AWS only; zero values when unavailable)
+	CostPrimaryType        string  `json:"cost_primary_type,omitempty"`
+	CostVCPUs              int     `json:"cost_vcpus,omitempty"`
+	CostMemGiB             float64 `json:"cost_mem_gib,omitempty"`
+	CostEstimatedNodes     int     `json:"cost_estimated_nodes,omitempty"`
+	CostOnDemandPerNodeHr  float64 `json:"cost_od_per_node_hr,omitempty"`
+	CostOnDemandMonthlyUSD float64 `json:"cost_od_monthly,omitempty"`
+	CostSpotPerNodeHr      float64 `json:"cost_spot_per_node_hr,omitempty"`
+	CostSpotMonthlyUSD     float64 `json:"cost_spot_monthly,omitempty"`
+	CostSpotSavingsPct     int     `json:"cost_spot_savings_pct,omitempty"`
+	CostHasSpot            bool    `json:"cost_has_spot,omitempty"`
+	CostNote               string  `json:"cost_note,omitempty"`
 }
 
 // ApplyRequest is the JSON body for POST /api/nodes/apply.
@@ -807,12 +820,25 @@ func Serve(port int, kubeCtx string) error {
 
 		rec := nodes.Build(profile, mode, provider)
 		manifest := nodes.GenerateManifest(rec, req.ClusterName, req.RoleARN)
+		c := rec.Cost
 		json.NewEncoder(w).Encode(RecommendResponse{
 			Manifest:   manifest,
 			Reasoning:  rec.Reasoning,
 			Families:   rec.InstanceFamilies,
 			Capacities: rec.CapacityTypes,
 			Archs:      rec.Architectures,
+
+			CostPrimaryType:        c.PrimaryType,
+			CostVCPUs:              c.VCPUs,
+			CostMemGiB:             c.MemGiB,
+			CostEstimatedNodes:     c.EstimatedNodes,
+			CostOnDemandPerNodeHr:  c.OnDemandPerNodeHr,
+			CostOnDemandMonthlyUSD: c.OnDemandMonthlyUSD,
+			CostSpotPerNodeHr:      c.SpotPerNodeHr,
+			CostSpotMonthlyUSD:     c.SpotMonthlyUSD,
+			CostSpotSavingsPct:     c.SpotSavingsPct,
+			CostHasSpot:            c.HasSpot,
+			CostNote:               c.Note,
 		})
 	})
 

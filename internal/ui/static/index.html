@@ -281,6 +281,69 @@
     }
     .reasoning-list li::before { content: "• "; color: var(--cyan); }
 
+    .cost-card {
+      background: rgba(139,92,246,0.07);
+      border: 1px solid rgba(139,92,246,0.25);
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      margin-bottom: 0.6rem;
+    }
+    .cost-card-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--violet-lt);
+      margin-bottom: 0.6rem;
+    }
+    .cost-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.6rem;
+    }
+    .cost-item {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.7rem;
+    }
+    .cost-item-label {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      margin-bottom: 0.15rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .cost-item-value {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .cost-item-value.green { color: var(--green); }
+    .cost-item-value.amber { color: var(--amber); }
+    .cost-item-sub {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      margin-top: 0.1rem;
+    }
+    .cost-savings-badge {
+      display: inline-block;
+      background: rgba(16,185,129,0.15);
+      color: var(--green);
+      border: 1px solid rgba(16,185,129,0.35);
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 0.1rem 0.4rem;
+      margin-left: 0.4rem;
+    }
+    .cost-note {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      margin-top: 0.6rem;
+      font-style: italic;
+    }
+
     .modal-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
     .btn-apply {
       background: rgba(16,185,129,0.15);
@@ -897,6 +960,15 @@
         <div class="modal-section-title">Why these instances</div>
         <ul class="reasoning-list" id="reasoning-list"></ul>
       </div>
+
+      <div id="cost-section" class="modal-section" style="display:none">
+        <div class="cost-card">
+          <div class="cost-card-title">Estimated Cost</div>
+          <div class="cost-grid" id="cost-grid"></div>
+          <div class="cost-note" id="cost-note"></div>
+        </div>
+      </div>
+
       <div class="modal-section">
         <div class="modal-section-title">Manifest</div>
         <textarea class="manifest-area" id="manifest-area" spellcheck="false"
@@ -1499,6 +1571,7 @@
 
     document.getElementById('modal-title').textContent = `⚙ Node Provisioning — ${ctx}`;
     document.getElementById('manifest-section').style.display = 'none';
+    document.getElementById('cost-section').style.display = 'none';
     document.getElementById('reasoning-list').innerHTML = '';
     document.getElementById('manifest-area').value = '';
     clearValidationResult();
@@ -1629,6 +1702,7 @@
       document.getElementById('manifest-area').value = data.manifest || '';
       const rl = document.getElementById('reasoning-list');
       rl.innerHTML = (data.reasoning || []).map(r => `<li>${esc(r)}</li>`).join('');
+      renderCostCard(data);
       document.getElementById('manifest-section').style.display = '';
     } catch (err) {
       showToast(`Error: ${err.message}`, 'error', 8000);
@@ -1636,6 +1710,62 @@
       genBtn.disabled = false;
       genBtn.textContent = '⚙ Generate NodePool Manifest';
     }
+  }
+
+  function renderCostCard(data) {
+    const section = document.getElementById('cost-section');
+    const grid = document.getElementById('cost-grid');
+    const noteEl = document.getElementById('cost-note');
+
+    if (!data.cost_estimated_nodes) {
+      section.style.display = 'none';
+      return;
+    }
+
+    const fmt2 = v => v.toFixed(4);
+    const fmtMo = v => '$' + Math.round(v).toLocaleString();
+
+    const items = [
+      {
+        label: 'Primary Instance',
+        value: data.cost_primary_type || '—',
+        sub: `${data.cost_vcpus || '—'} vCPU / ${data.cost_mem_gib || '—'} GiB`,
+        cls: ''
+      },
+      {
+        label: 'Estimated Nodes',
+        value: data.cost_estimated_nodes,
+        sub: 'based on workload + 20% headroom',
+        cls: ''
+      },
+      {
+        label: 'On-Demand / node',
+        value: `$${fmt2(data.cost_od_per_node_hr)}/hr`,
+        sub: `${fmtMo(data.cost_od_monthly)}/mo total`,
+        cls: 'amber'
+      }
+    ];
+
+    if (data.cost_has_spot) {
+      items.push({
+        label: 'Spot (typical) / node',
+        value: `$${fmt2(data.cost_spot_per_node_hr)}/hr`,
+        sub: `${fmtMo(data.cost_spot_monthly)}/mo total`,
+        cls: 'green',
+        badge: `saves ~${data.cost_spot_savings_pct}%`
+      });
+    }
+
+    grid.innerHTML = items.map(it => `
+      <div class="cost-item">
+        <div class="cost-item-label">${it.label}</div>
+        <div class="cost-item-value ${it.cls}">${esc(String(it.value))}${it.badge ? `<span class="cost-savings-badge">${esc(it.badge)}</span>` : ''}</div>
+        <div class="cost-item-sub">${esc(it.sub || '')}</div>
+      </div>
+    `).join('');
+
+    noteEl.textContent = data.cost_note || '';
+    section.style.display = '';
   }
 
   async function doApplyManifest() {

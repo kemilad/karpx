@@ -37,6 +37,9 @@ type Recommendation struct {
 
 	// Human-readable explanation bullets printed to the user
 	Reasoning []string
+
+	// Approximate cost projection (AWS only; see pricing.go)
+	Cost CostEstimate
 }
 
 // Build produces a Recommendation for the given workload profile, optimisation
@@ -70,6 +73,8 @@ func Build(
 	default:
 		r.Reasoning = append(r.Reasoning, "Provider unknown — showing generic guidance only")
 	}
+
+	r.Cost = EstimateCost(r, profile)
 
 	return r
 }
