@@ -140,6 +140,25 @@ karpx nodes -c my-cluster --mode cost        # skip the question, use cost-optim
 karpx nodes -c my-cluster --mode freetier    # free-tier eligible instances only
 ```
 
+### Estimated cost
+
+After analysing your workloads, karpx shows an approximate cost projection alongside the instance recommendation — no extra commands needed.
+
+```
+  Estimated cost
+  Primary instance  : m7g.xlarge  (4 vCPU, 16 GiB)
+  Estimated nodes   : 5  (based on current workload + 20% headroom)
+
+  On-demand         : $0.1632/hr per node   ~$596/mo total
+  Spot (typical)    : $0.0571/hr per node   ~$209/mo total   (saves ~65%)
+
+  Note: Approximate us-east-1 on-demand pricing. Actual costs vary by region and Spot availability.
+```
+
+The same cost breakdown appears as a card in the web dashboard (`karpx ui`) when you generate a NodePool manifest, with on-demand and Spot figures shown side by side.
+
+Pricing covers all AWS instance families used in recommendations: m7i, m7g, c7i, c7g, r7i, r7g, t3, t4g, g4dn, g5, p3, and their variants. Cost estimation is currently available for AWS only.
+
 ### Open-source add-ons
 
 karpx includes a built-in add-ons manager to install, inspect, and remove popular
