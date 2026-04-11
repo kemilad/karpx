@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>karpx dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="karpx-logo.svg">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -156,6 +157,7 @@
       font-weight: 700;
       color: var(--violet-lt);
       margin-bottom: 1.2rem;
+      padding-right: 2.5rem;
     }
 
     .modal-close {
@@ -710,6 +712,14 @@
     }
     .addon-grafana-link:hover { background: rgba(34,197,94,0.12); }
     .addon-grafana-link[title] { cursor: help; }
+    .addon-argocd-link {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      color: #f97316; font-size: 0.72rem; font-weight: 600;
+      text-decoration: none; border: 1px solid rgba(249,115,22,0.35);
+      border-radius: 4px; padding: 0.2rem 0.45rem; white-space: nowrap; margin-left: 0.25rem;
+    }
+    .addon-argocd-link:hover { background: rgba(249,115,22,0.12); }
+    .addon-argocd-link[title] { cursor: help; }
     .addon-progress-wrap {
       display: none; margin-top: 1rem;
     }
@@ -745,6 +755,24 @@
     }
     .grafana-url-box .grafana-link:hover { text-decoration: underline; }
     .grafana-url-box .grafana-cmd {
+      font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+      white-space: pre-wrap; line-height: 1.6;
+    }
+    .argocd-url-box {
+      display: none; margin-top: 0.75rem;
+      background: rgba(249,115,22,0.08); border: 1px solid rgba(249,115,22,0.35); border-radius: 8px;
+      padding: 0.85rem 1rem;
+    }
+    .argocd-url-box .argocd-label {
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+      color: #f97316; text-transform: uppercase; margin-bottom: 0.4rem;
+    }
+    .argocd-url-box .argocd-link {
+      display: inline-block; font-size: 1rem; font-weight: 700;
+      color: #f97316; text-decoration: none; margin-bottom: 0.45rem;
+    }
+    .argocd-url-box .argocd-link:hover { text-decoration: underline; }
+    .argocd-url-box .argocd-cmd {
       font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
       white-space: pre-wrap; line-height: 1.6;
     }
@@ -991,7 +1019,7 @@
     <div class="modal-title">⊕ Add-ons</div>
     <p id="addons-modal-ctx" style="color:var(--text-dim);font-size:0.8rem;margin:0 0 1rem"></p>
 
-    <div id="addons-table-wrap">
+    <div id="addons-table-wrap" style="max-height:55vh;overflow-y:auto">
       <span style="color:var(--muted);font-size:0.78rem"><span class="spinner" style="width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:0.4rem"></span>Checking add-on status…</span>
     </div>
 
@@ -1010,14 +1038,17 @@
       <a class="grafana-link" id="grafana-url-link" href="http://localhost:3000" target="_blank">http://localhost:3000</a>
       <div class="grafana-cmd" id="grafana-url-cmd"></div>
     </div>
+    <div class="argocd-url-box" id="argocd-url-box">
+      <div class="argocd-label">Argo CD ready</div>
+      <a class="argocd-link" id="argocd-url-link" href="http://localhost:8080" target="_blank">http://localhost:8080</a>
+      <div class="argocd-cmd" id="argocd-url-cmd"></div>
+    </div>
   </div>
 </div>
 
 <footer>
   karpx &mdash; ⚡ The Kubernetes essentials toolkit &nbsp;|&nbsp;
   <a href="https://github.com/kemilad/karpx" target="_blank" rel="noopener">GitHub</a>
-  &nbsp;|&nbsp;
-  <a href="https://karpenter.sh" target="_blank" rel="noopener">karpenter.sh</a>
 </footer>
 
 <script>
@@ -1921,6 +1952,7 @@
     document.getElementById('addon-progress-fill').style.width = '0%';
     document.getElementById('addon-progress-fill').style.background = '';
     document.getElementById('grafana-url-box').style.display = 'none';
+    document.getElementById('argocd-url-box').style.display = 'none';
     document.getElementById('addons-table-wrap').innerHTML =
       '<span style="color:var(--muted);font-size:0.78rem"><span class="spinner" style="width:12px;height:12px;border-width:1.5px;vertical-align:middle;margin-right:0.4rem"></span>Checking add-on status…</span>';
     document.getElementById('addons-modal').classList.add('open');
@@ -1965,11 +1997,18 @@
         statusHtml = `<span class="addon-missing">○ not installed</span>`;
         actionHtml = `<button class="btn-addon-install" onclick="doAddonInstall('${esc(a.id)}', this)">Install</button>`;
       }
+      urlHtml = '';
       if (a.grafana_url) {
-        urlHtml = `<a class="addon-grafana-link" href="#"
+        urlHtml += `<a class="addon-grafana-link" href="#"
           onclick="openGrafana(event,'${esc(a.id)}','${esc(a.grafana_url)}')"
           title="Click to start port-forward and open Grafana&#10;${esc(a.grafana_cmd || '')}">📊 Grafana</a>`;
-      } else {
+      }
+      if (a.argocd_url) {
+        urlHtml += `<a class="addon-argocd-link" href="#"
+          onclick="openArgoCD(event,'${esc(a.id)}','${esc(a.argocd_url)}')"
+          title="Click to start port-forward and open Argo CD&#10;${esc(a.argocd_cmd || '')}">🚀 Argo CD</a>`;
+      }
+      if (!urlHtml) {
         urlHtml = `<span style="color:var(--muted);font-size:0.72rem">—</span>`;
       }
       return `<tr>
@@ -1998,6 +2037,32 @@
     el.style.pointerEvents = 'none';
     try {
       const resp = await fetch('/api/addons/grafana-portforward', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _addonsCtx, addon_id: addonId }),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        window.open(result.url || url, '_blank');
+      } else {
+        showToast('Could not start port-forward: ' + (result.error || 'unknown error'), 'error', 8000);
+      }
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error', 8000);
+    } finally {
+      el.innerHTML = origHtml;
+      el.style.pointerEvents = '';
+    }
+  }
+
+  async function openArgoCD(event, addonId, url) {
+    event.preventDefault();
+    const el = event.currentTarget;
+    const origHtml = el.innerHTML;
+    el.innerHTML = '<span class="spinner" style="width:8px;height:8px;border-width:1.5px;vertical-align:middle;margin-right:3px"></span>Starting…';
+    el.style.pointerEvents = 'none';
+    try {
+      const resp = await fetch('/api/addons/argocd-portforward', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ context: _addonsCtx, addon_id: addonId }),
@@ -2080,6 +2145,13 @@
                 document.getElementById('grafana-url-link').href = evt.grafana_url;
                 document.getElementById('grafana-url-link').textContent = evt.grafana_url;
                 document.getElementById('grafana-url-cmd').textContent = evt.grafana_cmd || '';
+                box.style.display = 'block';
+              }
+              if (evt.argocd_url) {
+                const box = document.getElementById('argocd-url-box');
+                document.getElementById('argocd-url-link').href = evt.argocd_url;
+                document.getElementById('argocd-url-link').textContent = evt.argocd_url;
+                document.getElementById('argocd-url-cmd').textContent = evt.argocd_cmd || '';
                 box.style.display = 'block';
               }
               await loadAddons(_addonsCtx);
