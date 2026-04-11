@@ -13,7 +13,7 @@
   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝
 ```
 
-A single-binary toolkit to deploy and manage Kubernetes essentials — autoscaling, observability, networking, and more — across your clusters. No YAML, no context-switching, just your terminal.
+A single-binary toolkit to deploy and manage Kubernetes essentials — autoscaling, observability, GitOps, networking, and more — across your clusters. No YAML, no context-switching, just your terminal.
 
 ## Cloud Provider Support
 
@@ -174,6 +174,7 @@ open-source tools into any cluster via Helm — no separate `helm add repo` or
 | `aws-load-balancer-controller` | AWS Load Balancer Controller | Networking | Provision AWS ALB/NLB for Kubernetes Services and Ingresses |
 | `keda` | KEDA | Autoscaling | Kubernetes Event-Driven Autoscaling — scale on queues, topics, and more |
 | `cert-manager` | cert-manager | Security | Automatic TLS certificate provisioning via Let's Encrypt / ACME |
+| `argocd` | Argo CD | GitOps | Declarative GitOps continuous delivery — deploy and sync apps from Git |
 
 #### Shared Grafana — no duplicate instances
 
@@ -188,6 +189,16 @@ runs in the `monitoring` namespace:
 
 In both cases, all logs (Loki) and metrics (Prometheus) are visible through the
 **single shared Grafana** from `kube-prometheus-stack`.
+
+#### Pre-provisioned Grafana dashboards
+
+karpx pre-provisions the following community dashboards into Grafana at install
+time — they appear automatically without any manual import:
+
+| Dashboard | Grafana ID | Installed with |
+|-----------|-----------|----------------|
+| Loki Logs Explorer | [13639](https://grafana.com/grafana/dashboards/13639) | `loki-stack` or `kube-prometheus-stack` (when Loki is also present) |
+| Promtail 2.x (scrape targets, bytes/s, entry rate per pod) | [15443](https://grafana.com/grafana/dashboards/15443) | `loki-stack` or `kube-prometheus-stack` (when Loki is also present) |
 
 #### Grafana access after install
 
@@ -204,6 +215,78 @@ port-forward command and URL:
 
 Open `http://localhost:3000` in your browser to explore logs and metrics.
 
+In the **web dashboard** (`karpx ui`), the add-ons table shows a **📊 Grafana** button
+next to each installed observability stack. Clicking it starts the port-forward
+automatically and opens Grafana in a new tab.
+
+#### Argo CD
+
+`argocd` installs the full Argo CD server with the web UI enabled. The server runs
+in HTTP (insecure) mode so the port-forward works over plain HTTP.
+
+After install, karpx prints access details:
+
+```
+  ─── Argo CD ─────────────────────────────────────────────────────
+  Port-forward:  kubectl port-forward -n argocd svc/argocd-server 8080:80
+  URL:           http://localhost:8080
+  Credentials:   admin / kubectl -n argocd get secret argocd-initial-admin-secret \
+                   -o jsonpath='{.data.password}' | base64 -d
+  ─────────────────────────────────────────────────────────────────
+```
+
+In the **web dashboard**, a **🚀 Argo CD** button appears next to the installed addon.
+Clicking it starts the port-forward on `localhost:8080` and opens the Argo CD UI.
+
+**Argo CD CLI** — install the `argocd` CLI alongside the server to manage apps from
+your terminal:
+
+```bash
+# macOS (Homebrew)
+brew install argocd
+
+# Linux
+curl -sSL -o /usr/local/bin/argocd \
+  https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+chmod +x /usr/local/bin/argocd
+```
+
+Log in after starting the port-forward:
+
+```bash
+argocd login localhost:8080 --insecure --username admin \
+  --password $(kubectl -n argocd get secret argocd-initial-admin-secret \
+              -o jsonpath='{.data.password}' | base64 -d)
+```
+
+#### cert-manager
+
+`cert-manager` is installed with `installCRDs=true` so the required
+`Certificate`, `Issuer`, and `ClusterIssuer` CRDs are created automatically —
+no separate `kubectl apply` for CRDs needed.
+
+#### AWS Load Balancer Controller — automatic cluster discovery
+
+karpx automatically derives the values that the controller needs from your
+kubeconfig context — you do not need to pass them manually:
+
+| Value | How it is resolved |
+|-------|-------------------|
+| `clusterName` | Extracted from the EKS ARN in the kubeconfig context (e.g. `arn:aws:eks:<region>:<account>:cluster/<name>`) |
+| `region` | Extracted from the same EKS ARN |
+| `vpcId` | Queried live from the EKS API via `aws eks describe-cluster` |
+
+After install, annotate the ServiceAccount with your IAM role ARN so the
+controller can provision ALBs and NLBs:
+
+```bash
+kubectl annotate serviceaccount -n kube-system aws-load-balancer-controller \
+  eks.amazonaws.com/role-arn=arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>
+```
+
+See the [official setup guide](https://kubernetes-sigs.github.io/aws-load-balancer-controller/)
+for instructions on creating the required IAM policy and role.
+
 #### CLI usage
 
 ```bash
@@ -214,8 +297,11 @@ karpx addons list -c my-cluster
 karpx addons install kube-prometheus-stack -c my-cluster
 karpx addons install loki-stack -c my-cluster
 
-# Install networking add-on (cluster name is derived from context automatically)
+# Install networking add-on (cluster name, region, VPC ID are derived from context automatically)
 karpx addons install aws-load-balancer-controller -c my-cluster
+
+# Install GitOps (Argo CD web UI + CLI support)
+karpx addons install argocd -c my-cluster
 
 # Install other add-ons
 karpx addons install keda -c my-cluster
@@ -224,19 +310,6 @@ karpx addons install cert-manager -c my-cluster
 # Uninstall an add-on
 karpx addons uninstall loki-stack -c my-cluster
 ```
-
-#### AWS Load Balancer Controller — IAM setup
-
-After installing `aws-load-balancer-controller`, annotate the ServiceAccount with
-your IAM role ARN so the controller can provision ALBs and NLBs:
-
-```bash
-kubectl annotate serviceaccount -n kube-system aws-load-balancer-controller \
-  eks.amazonaws.com/role-arn=arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>
-```
-
-See the [official setup guide](https://kubernetes-sigs.github.io/aws-load-balancer-controller/)
-for instructions on creating the required IAM policy and role.
 
 #### TUI usage
 
@@ -256,6 +329,25 @@ detail panel with the Helm chart reference, target namespace, and release name.
 
 Install uses `helm upgrade --install` with `--wait` (10 min timeout), so progress
 streams live to your terminal and the command exits with a non-zero status on failure.
+
+After a successful install, access details are printed directly in the terminal:
+
+- **Grafana** — port-forward command + `http://localhost:3000` + credential hint
+- **Argo CD** — port-forward command + `http://localhost:8080` + command to retrieve the initial admin password
+
+#### Web dashboard URL column
+
+The add-ons table in `karpx ui` has a **URL** column that shows endpoint buttons
+for installed add-ons:
+
+| Button | Addon | What it does |
+|--------|-------|-------------|
+| 📊 Grafana | `loki-stack`, `kube-prometheus-stack` | Starts `kubectl port-forward` to `localhost:3000` and opens Grafana |
+| 🚀 Argo CD | `argocd` | Starts `kubectl port-forward` to `localhost:8080` and opens the Argo CD web UI |
+
+The port-forward is started in the background by the dashboard server and kept alive
+until the dashboard is stopped (`Ctrl+C`). Clicking the button again reuses the
+existing port-forward if the port is already open.
 
 ### Non-interactive (CI / scripting)
 
@@ -307,11 +399,13 @@ karpx version
 # List add-ons and their install status.
 karpx addons list -c my-cluster
 
-# Install an add-on (streams helm output; exits non-zero on failure).
-karpx addons install loki-stack          -c my-cluster
-karpx addons install kube-prometheus-stack -c my-cluster
-karpx addons install keda                -c my-cluster
-karpx addons install cert-manager        -c my-cluster
+# Install add-ons (streams helm output; exits non-zero on failure).
+karpx addons install loki-stack              -c my-cluster
+karpx addons install kube-prometheus-stack   -c my-cluster
+karpx addons install aws-load-balancer-controller -c my-cluster
+karpx addons install argocd                  -c my-cluster
+karpx addons install keda                    -c my-cluster
+karpx addons install cert-manager            -c my-cluster
 
 # Uninstall an add-on.
 karpx addons uninstall loki-stack -c my-cluster

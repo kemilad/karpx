@@ -53,6 +53,13 @@ type Addon struct {
 	// "admin / prom-operator".  Shown alongside the port-forward hint.
 	GrafanaDefaultCreds string
 
+	// ArgoCDSvc is the Kubernetes Service name to use for the ArgoCD port-forward
+	// hint printed after a successful install.  Empty means no hint is shown.
+	ArgoCDSvc string
+
+	// ArgoCDDefaultCreds is a short human-readable credential hint for ArgoCD.
+	ArgoCDDefaultCreds string
+
 	// RequiresClusterName, when true, injects clusterName=<name> into the
 	// Helm set-values, deriving the name from the kubeconfig context.
 	RequiresClusterName bool
@@ -175,6 +182,41 @@ func Registry() []Addon {
 			Namespace:   "cert-manager",
 			Release:     "cert-manager",
 			SetValues:   []string{"installCRDs=true"},
+		},
+		{
+			ID:          "argocd",
+			Name:        "Argo CD",
+			Description: "GitOps continuous delivery — declarative app deployment for Kubernetes (GUI + CLI)",
+			Category:    "GitOps",
+			RepoName:    "argo",
+			RepoURL:     "https://argoproj.github.io/argo-helm",
+			Chart:       "argo/argo-cd",
+			Namespace:   "argocd",
+			Release:     "argocd",
+			SetValues: []string{
+				// Run ArgoCD server in insecure (HTTP) mode so the port-forward
+				// can use plain HTTP on port 80 → local port 8080.
+				"server.extraArgs[0]=--insecure",
+			},
+			ArgoCDSvc:          "argocd-server",
+			ArgoCDDefaultCreds: "admin / kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d",
+			PostInstallNotes: `  ─── Argo CD CLI ──────────────────────────────────────────────────────────
+  Install the argocd CLI (pick your platform):
+
+    # macOS (Homebrew)
+    brew install argocd
+
+    # Linux
+    curl -sSL -o /usr/local/bin/argocd \
+      https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+    chmod +x /usr/local/bin/argocd
+
+  Login after starting the port-forward:
+    argocd login localhost:8080 --insecure --username admin \
+      --password $(kubectl -n argocd get secret argocd-initial-admin-secret \
+                  -o jsonpath='{.data.password}' | base64 -d)
+
+  ──────────────────────────────────────────────────────────────────────────`,
 		},
 	}
 }
@@ -581,8 +623,9 @@ helmLoop:
 
 	printProgress(100, "✓ Done")
 
-	// ── Step 6: print Grafana access hint ────────────────────────────────
+	// ── Step 6: print Grafana / ArgoCD access hints ──────────────────────
 	printGrafanaHint(kubeCtx, a, grafanaDisabledBy)
+	printArgoCDHint(kubeCtx, a)
 
 	// ── Step 7: extra post-install notes ─────────────────────────────────
 	if a.PostInstallNotes != "" {
@@ -626,6 +669,24 @@ func printGrafanaHint(kubeCtx string, a Addon, grafanaDisabledBy string) {
 	fmt.Printf("  URL:           http://localhost:3000\n")
 	if creds != "" {
 		fmt.Printf("  Credentials:   %s\n", creds)
+	}
+	fmt.Printf("  ─────────────────────────────────────────────────────────────────\n")
+}
+
+// printArgoCDHint prints port-forward instructions for the ArgoCD web UI.
+func printArgoCDHint(kubeCtx string, a Addon) {
+	if a.ArgoCDSvc == "" {
+		return
+	}
+	pfCmd := fmt.Sprintf("kubectl port-forward -n %s svc/%s 8080:80", a.Namespace, a.ArgoCDSvc)
+	if kubeCtx != "" {
+		pfCmd += " --context " + kubeCtx
+	}
+	fmt.Printf("\n  ─── Argo CD ─────────────────────────────────────────────────────\n")
+	fmt.Printf("  Port-forward:  %s\n", pfCmd)
+	fmt.Printf("  URL:           http://localhost:8080\n")
+	if a.ArgoCDDefaultCreds != "" {
+		fmt.Printf("  Credentials:   %s\n", a.ArgoCDDefaultCreds)
 	}
 	fmt.Printf("  ─────────────────────────────────────────────────────────────────\n")
 }

@@ -41,6 +41,12 @@ var (
 	pfProcess *os.Process // nil when no port-forward is running
 )
 
+// ── ArgoCD port-forward manager ───────────────────────────────────────────────
+var (
+	argoCDPfMu      sync.Mutex
+	argoCDPfProcess *os.Process
+)
+
 // isPortListening returns true when something is accepting TCP connections on
 // localhost:<port> (checked with a short dial timeout).
 func isPortListening(port int) bool {
@@ -86,6 +92,47 @@ func startGrafanaPortForward(kubeCtx, namespace, svc string) error {
 	pfMu.Unlock()
 
 	// Wait up to 15 s for the port to become available.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(400 * time.Millisecond)
+		if isPortListening(localPort) {
+			return nil
+		}
+	}
+	return fmt.Errorf("timed out waiting for port-forward to become ready on :%d", localPort)
+}
+
+// startArgoCDPortForward starts kubectl port-forward for the ArgoCD server service
+// and waits (up to 15 s) until port 8080 is ready.
+func startArgoCDPortForward(kubeCtx, namespace, svc string) error {
+	const localPort = 8080
+
+	if isPortListening(localPort) {
+		return nil
+	}
+
+	argoCDPfMu.Lock()
+	if argoCDPfProcess != nil {
+		_ = argoCDPfProcess.Kill()
+		argoCDPfProcess = nil
+	}
+	argoCDPfMu.Unlock()
+
+	args := []string{"port-forward", "-n", namespace, "svc/" + svc, fmt.Sprintf("%d:80", localPort)}
+	if kubeCtx != "" {
+		args = append(args, "--context", kubeCtx)
+	}
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("kubectl port-forward failed to start: %w", err)
+	}
+
+	argoCDPfMu.Lock()
+	argoCDPfProcess = cmd.Process
+	argoCDPfMu.Unlock()
+
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(400 * time.Millisecond)
@@ -152,6 +199,8 @@ type addonInstallEvent struct {
 	Error      string `json:"error,omitempty"`
 	GrafanaURL string `json:"grafana_url,omitempty"`
 	GrafanaCmd string `json:"grafana_cmd,omitempty"`
+	ArgoCDURL  string `json:"argocd_url,omitempty"`
+	ArgoCDCmd  string `json:"argocd_cmd,omitempty"`
 }
 
 // UninstallRequest is the JSON body for POST /api/uninstall.
@@ -249,6 +298,8 @@ type AddonStatusEntry struct {
 	Error       string `json:"error,omitempty"`
 	GrafanaURL  string `json:"grafana_url,omitempty"` // set when addon provides/shares Grafana
 	GrafanaCmd  string `json:"grafana_cmd,omitempty"` // kubectl port-forward command
+	ArgoCDURL   string `json:"argocd_url,omitempty"`  // set when addon provides ArgoCD
+	ArgoCDCmd   string `json:"argocd_cmd,omitempty"`  // kubectl port-forward command
 }
 
 // AddonActionRequest is the JSON body for POST /api/addons/install and /api/addons/uninstall.
@@ -976,6 +1027,18 @@ func Serve(port int, kubeCtx string) error {
 					se.GrafanaCmd += "\n# credentials: " + grafanaCreds
 				}
 			}
+			// Attach ArgoCD URL for installed ArgoCD addon.
+			if d.status == "installed" && a.ArgoCDSvc != "" {
+				pfCmd := fmt.Sprintf("kubectl port-forward -n %s svc/%s 8080:80", a.Namespace, a.ArgoCDSvc)
+				if kubeCtxParam != "" {
+					pfCmd += " --context " + kubeCtxParam
+				}
+				se.ArgoCDURL = "http://localhost:8080"
+				se.ArgoCDCmd = pfCmd
+				if a.ArgoCDDefaultCreds != "" {
+					se.ArgoCDCmd += "\n# credentials: " + a.ArgoCDDefaultCreds
+				}
+			}
 			entries[i] = se
 		}
 		json.NewEncoder(w).Encode(entries)
@@ -1260,6 +1323,16 @@ func Serve(port int, kubeCtx string) error {
 				finalEvt.GrafanaCmd += "\n# credentials: " + grafanaCreds
 			}
 		}
+		if a.ArgoCDSvc != "" {
+			finalEvt.ArgoCDURL = "http://localhost:8080"
+			finalEvt.ArgoCDCmd = fmt.Sprintf("kubectl port-forward -n %s svc/%s 8080:80", a.Namespace, a.ArgoCDSvc)
+			if req.Context != "" {
+				finalEvt.ArgoCDCmd += " --context " + req.Context
+			}
+			if a.ArgoCDDefaultCreds != "" {
+				finalEvt.ArgoCDCmd += "\n# credentials: " + a.ArgoCDDefaultCreds
+			}
+		}
 		sendEvt(finalEvt)
 	})
 
@@ -1352,6 +1425,39 @@ func Serve(port int, kubeCtx string) error {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "url": "http://localhost:3000"})
+	})
+
+	// ── ArgoCD port-forward ───────────────────────────────────────────────────
+	// POST /api/addons/argocd-portforward
+	// Starts (or reuses) a kubectl port-forward to the ArgoCD server service
+	// on localhost:8080, then returns once the port is ready.
+	mux.HandleFunc("/api/addons/argocd-portforward", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req AddonActionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid request body"})
+			return
+		}
+		a, ok := addons.ByID(req.AddonID)
+		if !ok {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unknown add-on: " + req.AddonID})
+			return
+		}
+		if a.ArgoCDSvc == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "this add-on does not provide an ArgoCD service"})
+			return
+		}
+		if err := startArgoCDPortForward(req.Context, a.Namespace, a.ArgoCDSvc); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "url": "http://localhost:8080"})
 	})
 
 	srv := &http.Server{

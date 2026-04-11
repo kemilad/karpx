@@ -1458,6 +1458,7 @@ func addonsCmd() *cobra.Command {
     karpx addons install loki-stack -c my-cluster
     karpx addons install kube-prometheus-stack -c my-cluster
     karpx addons install aws-load-balancer-controller -c my-cluster
+    karpx addons install argocd -c my-cluster
     karpx addons uninstall cert-manager -c my-cluster
 `,
 	}
