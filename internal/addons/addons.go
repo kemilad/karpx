@@ -110,9 +110,8 @@ func Registry() []Addon {
 				// into a dedicated "Logs" folder for easy discovery.
 				// Using the "logs" provider key causes the Grafana chart to create
 				// a dashboard provider with folder="logs" automatically.
-				// 13639 = Loki Logs Explorer  — browse & search pod logs by label
-				// 15443 = Promtail 2.x         — scrape targets, bytes/s per pod
-				// 12611 = Kubernetes / Logs     — per-namespace / per-pod log viewer
+				// 13639 = Loki Logs Explorer — browse & search pod logs by label
+				// 15443 = Promtail 2.x        — scrape targets, bytes/s per pod
 				"grafana.sidecar.dashboards.enabled=true",
 				"grafana.dashboards.logs.loki-logs.gnetId=13639",
 				"grafana.dashboards.logs.loki-logs.revision=2",
@@ -120,9 +119,6 @@ func Registry() []Addon {
 				"grafana.dashboards.logs.promtail.gnetId=15443",
 				"grafana.dashboards.logs.promtail.revision=6",
 				"grafana.dashboards.logs.promtail.datasource=Prometheus",
-				"grafana.dashboards.logs.k8s-logs.gnetId=12611",
-				"grafana.dashboards.logs.k8s-logs.revision=1",
-				"grafana.dashboards.logs.k8s-logs.datasource=Loki",
 			},
 			// When kube-prometheus-stack is already installed, skip the duplicate Grafana.
 			DisableGrafanaIfReleases: []string{"kube-prometheus-stack"},
@@ -528,10 +524,7 @@ func Install(kubeCtx string, a Addon) error {
 					"grafana.dashboards.logs.promtail.gnetId=15443",
 					"grafana.dashboards.logs.promtail.revision=6",
 					"grafana.dashboards.logs.promtail.datasource=Prometheus",
-					"grafana.dashboards.logs.k8s-logs.gnetId=12611",
-					"grafana.dashboards.logs.k8s-logs.revision=1",
-					"grafana.dashboards.logs.k8s-logs.datasource=Loki",
-				)
+					)
 			}
 		}
 	}
@@ -624,12 +617,12 @@ helmLoop:
 				"--set", "grafana.additionalDataSources[0].access=proxy",
 				"--set", "grafana.additionalDataSources[0].isDefault=false",
 				"--set", "grafana.sidecar.dashboards.enabled=true",
-				"--set", "grafana.dashboards.default.loki-logs.gnetId=13639",
-				"--set", "grafana.dashboards.default.loki-logs.revision=2",
-				"--set", "grafana.dashboards.default.loki-logs.datasource=Loki",
-				"--set", "grafana.dashboards.default.promtail.gnetId=15443",
-				"--set", "grafana.dashboards.default.promtail.revision=6",
-				"--set", "grafana.dashboards.default.promtail.datasource=Prometheus",
+				"--set", "grafana.dashboards.logs.loki-logs.gnetId=13639",
+				"--set", "grafana.dashboards.logs.loki-logs.revision=2",
+				"--set", "grafana.dashboards.logs.loki-logs.datasource=Loki",
+				"--set", "grafana.dashboards.logs.promtail.gnetId=15443",
+				"--set", "grafana.dashboards.logs.promtail.revision=6",
+				"--set", "grafana.dashboards.logs.promtail.datasource=Prometheus",
 				"--wait", "--timeout", "5m",
 			}
 			if kubeCtx != "" {
