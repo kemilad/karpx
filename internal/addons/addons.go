@@ -106,19 +106,12 @@ func Registry() []Addon {
 			SetValues: []string{
 				"grafana.enabled=true",
 				"promtail.enabled=true",
-				// Provision Loki + Promtail dashboards from Grafana.com at startup
-				// into a dedicated "Logs" folder for easy discovery.
-				// Using the "logs" provider key causes the Grafana chart to create
-				// a dashboard provider with folder="logs" automatically.
-				// 13639 = Loki Logs Explorer — browse & search pod logs by label
-				// 15443 = Promtail 2.x        — scrape targets, bytes/s per pod
+				// Enable the k8s-sidecar so any ConfigMap labelled
+				// grafana_dashboard=1 is hot-loaded into Grafana automatically.
+				// We do NOT use grafana.dashboards.* (which generates a
+				// download-dashboards init container that curls grafana.com) —
+				// that mechanism is unreliable without a guaranteed egress path.
 				"grafana.sidecar.dashboards.enabled=true",
-				"grafana.dashboards.logs.loki-logs.gnetId=13639",
-				"grafana.dashboards.logs.loki-logs.revision=2",
-				"grafana.dashboards.logs.loki-logs.datasource=Loki",
-				"grafana.dashboards.logs.promtail.gnetId=15443",
-				"grafana.dashboards.logs.promtail.revision=6",
-				"grafana.dashboards.logs.promtail.datasource=Prometheus",
 			},
 			// When kube-prometheus-stack is already installed, skip the duplicate Grafana.
 			DisableGrafanaIfReleases: []string{"kube-prometheus-stack"},
@@ -518,13 +511,7 @@ func Install(kubeCtx string, a Addon) error {
 					"grafana.additionalDataSources[0].access=proxy",
 					"grafana.additionalDataSources[0].isDefault=false",
 					"grafana.sidecar.dashboards.enabled=true",
-					"grafana.dashboards.logs.loki-logs.gnetId=13639",
-					"grafana.dashboards.logs.loki-logs.revision=2",
-					"grafana.dashboards.logs.loki-logs.datasource=Loki",
-					"grafana.dashboards.logs.promtail.gnetId=15443",
-					"grafana.dashboards.logs.promtail.revision=6",
-					"grafana.dashboards.logs.promtail.datasource=Prometheus",
-					)
+				)
 			}
 		}
 	}
@@ -617,12 +604,6 @@ helmLoop:
 				"--set", "grafana.additionalDataSources[0].access=proxy",
 				"--set", "grafana.additionalDataSources[0].isDefault=false",
 				"--set", "grafana.sidecar.dashboards.enabled=true",
-				"--set", "grafana.dashboards.logs.loki-logs.gnetId=13639",
-				"--set", "grafana.dashboards.logs.loki-logs.revision=2",
-				"--set", "grafana.dashboards.logs.loki-logs.datasource=Loki",
-				"--set", "grafana.dashboards.logs.promtail.gnetId=15443",
-				"--set", "grafana.dashboards.logs.promtail.revision=6",
-				"--set", "grafana.dashboards.logs.promtail.datasource=Prometheus",
 				"--wait", "--timeout", "5m",
 			}
 			if kubeCtx != "" {
