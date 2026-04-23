@@ -3,9 +3,10 @@
 // For each minor-version hop the sequence is:
 //  1. Apply CRDs from the official Helm chart (helm show crds | kubectl apply --server-side)
 //  2. Scale the controller to ≥ 2 replicas and wait for the extra pod to be Ready
-//  3a. If Karpenter was installed via Helm: helm upgrade --reuse-values
+//  3a. If Karpenter was installed via Helm: helm upgrade --set controller.image.tag=vX.Y.Z --wait
 //  3b. If installed via raw manifests: kubectl set image (preserves all existing config)
 //  4. kubectl rollout status (wait up to 5 minutes)
+//  5. Verify the running pod image matches the target version (guards against silent no-ops)
 //
 // When upgrading across multiple minor versions the hop is split into one
 // step per minor (e.g. 1.0 → 1.1 → 1.2 → 1.3) as recommended by upstream.
@@ -189,6 +190,18 @@ func runHop(p Params, from, to string, report Reporter) error {
 	}
 	report(Step{Name: rollStep, Detail: "all pods healthy", OK: true})
 
+	// ── 5. Verify the running image actually changed ───────────────────────
+	// kubectl rollout status can return success even when no rollout occurred
+	// (e.g. if the Deployment spec was unchanged due to --reuse-values keeping
+	// the old image tag).  Explicitly check that pods are running the target image.
+	imgStep := "Verify image"
+	report(Step{Name: imgStep, Detail: fmt.Sprintf("checking pods run controller:v%s", to)})
+	if err := verifyRunningImage(p.KubeCtx, p.Namespace, to); err != nil {
+		report(Step{Name: imgStep, Err: err.Error()})
+		return fmt.Errorf("image verification: %w", err)
+	}
+	report(Step{Name: imgStep, Detail: fmt.Sprintf("confirmed controller:v%s running", to), OK: true})
+
 	return nil
 }
 
@@ -226,6 +239,12 @@ func applyCRDs(kubeCtx, version string) error {
 }
 
 // helmUpgrade upgrades an existing Helm-managed Karpenter release.
+//
+// --reuse-values alone is not safe for version upgrades: it preserves the
+// controller.image.tag from the previous install, so Helm updates its metadata
+// but the Deployment pod spec never changes and no rollout occurs.  We always
+// explicitly override controller.image.tag so the image is forced to the target
+// version regardless of what the saved values contain.
 func helmUpgrade(kubeCtx, namespace, release, version string, reuseVals bool) error {
 	ver := strings.TrimPrefix(version, "v")
 	args := []string{
@@ -233,6 +252,11 @@ func helmUpgrade(kubeCtx, namespace, release, version string, reuseVals bool) er
 		"oci://public.ecr.aws/karpenter/karpenter",
 		"--version", ver,
 		"--namespace", namespace,
+		// Always force the correct image tag — this is the key fix.
+		// Without this, --reuse-values would keep the old tag and the
+		// Deployment spec would never change, producing a silent no-op.
+		"--set", "controller.image.tag=v" + ver,
+		"--wait", "--timeout", "10m",
 	}
 	if reuseVals {
 		args = append(args, "--reuse-values")
@@ -391,6 +415,36 @@ func BuildPath(current, target string, available []string) ([]string, error) {
 	// Final hop is always the requested target.
 	path = append(path, tgt.Original())
 	return path, nil
+}
+
+// verifyRunningImage checks that the Karpenter Deployment's pod template
+// references the expected controller image version.  This catches the case where
+// helm upgrade reported success but the Deployment spec was never actually
+// updated (e.g. old image tag preserved by --reuse-values).
+func verifyRunningImage(kubeCtx, namespace, version string) error {
+	ver := strings.TrimPrefix(version, "v")
+	args := []string{
+		"get", "deployment", "karpenter",
+		"-n", namespace,
+		"-o", "jsonpath={.spec.template.spec.containers[*].image}",
+	}
+	if kubeCtx != "" {
+		args = append(args, "--context", kubeCtx)
+	}
+	out, err := exec.Command("kubectl", args...).Output()
+	if err != nil {
+		return fmt.Errorf("could not read deployment image: %w", err)
+	}
+	images := strings.TrimSpace(string(out))
+	if !strings.Contains(images, ":v"+ver) && !strings.Contains(images, ":"+ver) {
+		return fmt.Errorf(
+			"deployment is still running old image — got %q, expected version v%s\n"+
+				"Run: helm upgrade karpenter oci://public.ecr.aws/karpenter/karpenter --version %s "+
+				"--namespace %s --reuse-values --set controller.image.tag=v%s --wait",
+			images, ver, ver, namespace, ver,
+		)
+	}
+	return nil
 }
 
 // SortAsc sorts bare semver strings ascending in-place.
