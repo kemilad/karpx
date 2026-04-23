@@ -1541,6 +1541,7 @@
 
   function closeUninstallModal() {
     document.getElementById('uninstall-modal').classList.remove('open');
+    refresh();
   }
 
   async function confirmUninstall() {
@@ -1575,7 +1576,10 @@
         confirmBtn.style.background = 'rgba(34,197,94,0.15)';
         confirmBtn.style.borderColor = 'var(--green)';
         confirmBtn.style.color = 'var(--green)';
+        confirmBtn.disabled = false;
+        confirmBtn.onclick = () => closeUninstallModal();
         await refresh();
+        setTimeout(() => closeUninstallModal(), 3000);
       } else {
         confirmBtn.disabled = false;
         confirmBtn.textContent = 'Retry';

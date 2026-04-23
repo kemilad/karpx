@@ -481,12 +481,19 @@ func Serve(port int, kubeCtx string) error {
 		addStep("Running helm uninstall…")
 		helmArgs := []string{"uninstall", release, "--namespace", ns, "--kube-context", req.Context}
 		out, err := exec.CommandContext(ctx, "helm", helmArgs...).CombinedOutput()
+		outStr := strings.TrimSpace(string(out))
 		if err != nil {
-			addStep(fmt.Sprintf("✗ helm uninstall failed: %v — %s", err, strings.TrimSpace(string(out))))
-			json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
-			return
+			// "release: not found" means it was already removed — treat as success
+			if strings.Contains(outStr, "not found") || strings.Contains(outStr, "release: not found") {
+				addStep("✓ Helm release already removed (was not installed)")
+			} else {
+				addStep(fmt.Sprintf("✗ helm uninstall failed: %v — %s", err, outStr))
+				json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
+				return
+			}
+		} else {
+			addStep("✓ Helm release removed")
 		}
-		addStep("✓ Helm release removed")
 
 		// ── Step 2: delete custom resources ──────────────────────────────
 		if req.DeleteCRDs {
