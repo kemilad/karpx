@@ -1016,7 +1016,7 @@
 <div class="modal-backdrop" id="addons-modal">
   <div class="modal" style="max-width:720px">
     <button class="modal-close" onclick="closeAddonsModal()">✕</button>
-    <div class="modal-title">⊕ Add-ons</div>
+    <div class="modal-title">+ Add-ons</div>
     <p id="addons-modal-ctx" style="color:var(--text-dim);font-size:0.8rem;margin:0 0 1rem"></p>
 
     <div id="addons-table-wrap" style="max-height:55vh;overflow-y:auto">
@@ -1142,12 +1142,12 @@
           data-release="${esc(cluster.karpenter_release || 'karpenter')}">Uninstall</button>`;
       const addonsBtn = `<button class="btn-addons"
           data-action="addons"
-          data-context="${esc(cluster.context)}">⊕ Add-ons</button>`;
+          data-context="${esc(cluster.context)}">+ Add-ons</button>`;
       return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">${upgradeBtn}${nodesBtn}${uninstallBtn}${addonsBtn}</span>`;
     }
     const addonsBtn2 = `<button class="btn-addons"
         data-action="addons"
-        data-context="${esc(cluster.context)}">⊕ Add-ons</button>`;
+        data-context="${esc(cluster.context)}">+ Add-ons</button>`;
     if (cluster.provider === 'aws') {
       return `<span style="display:flex;gap:0.4rem;flex-wrap:wrap">
         <button class="btn-install"
