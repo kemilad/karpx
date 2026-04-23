@@ -132,8 +132,10 @@ func detectViaKubeAPI(kubeCtx string) (*Info, error) {
 		})
 	}
 	if len(deps.Items) == 0 {
-		// CRDs present but no standard deployment found; still installed.
-		return &Info{Installed: true}, nil
+		// CRDs present but no controller deployment running — Karpenter is not
+		// actually installed. The CRDs are likely leftover from a previous
+		// uninstall where the namespace/CRDs weren't cleaned up.
+		return &Info{Installed: false}, nil
 	}
 
 	dep := deps.Items[0]
