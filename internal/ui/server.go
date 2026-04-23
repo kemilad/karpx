@@ -477,6 +477,22 @@ func Serve(port int, kubeCtx string) error {
 		var steps []string
 		addStep := func(s string) { steps = append(steps, s) }
 
+		// ── Step 0: strip finalizers ─────────────────────────────────────
+		// Remove Karpenter finalizers BEFORE helm uninstall removes the
+		// controller. Without this, NodePool/NodeClaim/NodeClass objects get
+		// stuck in Terminating because no controller is left to process them.
+		addStep("Removing Karpenter finalizers…")
+		for _, res := range []string{
+			"nodeclaims",
+			"nodepools",
+			"ec2nodeclasses.karpenter.k8s.aws",
+			"aksnodeclasses.karpenter.azure.com",
+			"gcpnodeclasses.karpenter.k8s.gcp",
+		} {
+			stripKarpenterFinalizers(ctx, req.Context, res)
+		}
+		addStep("✓ Finalizers cleared")
+
 		// ── Step 1: helm uninstall ────────────────────────────────────────
 		addStep("Running helm uninstall…")
 		helmArgs := []string{"uninstall", release, "--namespace", ns, "--kube-context", req.Context}
@@ -946,6 +962,20 @@ func Serve(port int, kubeCtx string) error {
 			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
 			return
 		}
+		// Clear finalizers from any stuck Terminating NodePool/NodeClass objects
+		// so kubectl apply doesn't collide with objects that can never finish
+		// deleting (their controller was removed before finalizers were cleared).
+		applyCtx, applyCancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer applyCancel()
+		for _, res := range []string{
+			"nodepools",
+			"ec2nodeclasses.karpenter.k8s.aws",
+			"aksnodeclasses.karpenter.azure.com",
+			"gcpnodeclasses.karpenter.k8s.gcp",
+		} {
+			stripKarpenterFinalizers(applyCtx, req.Context, res)
+		}
+
 		args := []string{"apply", "-f", "-"}
 		if req.Context != "" {
 			args = append(args, "--context", req.Context)
@@ -1689,6 +1719,33 @@ func addonRegion(kubeCtx string) string {
 		return parts[3]
 	}
 	return ""
+}
+
+// stripKarpenterFinalizers removes all finalizers from every instance of the
+// given Karpenter resource type. This prevents objects from getting stuck in
+// Terminating state after the Karpenter controller is removed (e.g. during
+// helm uninstall, which removes the controller before CRD objects are gone).
+// Errors are silently ignored — the resource type may simply not exist.
+func stripKarpenterFinalizers(ctx context.Context, kubeCtx, resource string) {
+	listArgs := []string{"get", resource, "-o", "name", "--ignore-not-found"}
+	if kubeCtx != "" {
+		listArgs = append(listArgs, "--context", kubeCtx)
+	}
+	out, err := exec.CommandContext(ctx, "kubectl", listArgs...).Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return
+	}
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		pArgs := []string{"patch", name, "--type=merge", "-p", `{"metadata":{"finalizers":null}}`}
+		if kubeCtx != "" {
+			pArgs = append(pArgs, "--context", kubeCtx)
+		}
+		exec.CommandContext(ctx, "kubectl", pArgs...).Run() //nolint:errcheck
+	}
 }
 
 // addonVPCID queries the EKS cluster via the AWS CLI to get the VPC ID.
