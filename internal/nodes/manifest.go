@@ -42,6 +42,12 @@ func generateAWSManifest(r Recommendation, clusterName, roleARN string) string {
 	if clusterName == "" {
 		clusterName = "<CLUSTER_NAME>"
 	}
+	// If a full EKS ARN was passed (arn:aws:eks:region:account:cluster/name),
+	// extract just the short cluster name — the karpenter.sh/discovery tag on
+	// subnets and security groups is always the bare cluster name, not the ARN.
+	if idx := strings.LastIndex(clusterName, ":cluster/"); idx >= 0 {
+		clusterName = clusterName[idx+9:]
+	}
 	// EC2NodeClass spec.role requires the short IAM role name, not the ARN.
 	roleName := roleNameFromARN(roleARN)
 	if roleName == "" {
