@@ -106,16 +106,23 @@ func Registry() []Addon {
 			SetValues: []string{
 				"grafana.enabled=true",
 				"promtail.enabled=true",
-				// Provision Loki + Promtail dashboards from Grafana.com at startup.
-				// 13639 = Loki Logs Explorer (browse & search logs)
-				// 15443 = Promtail 2.x (scrape targets, bytes/s, entry rate per pod)
+				// Provision Loki + Promtail dashboards from Grafana.com at startup
+				// into a dedicated "Logs" folder for easy discovery.
+				// Using the "logs" provider key causes the Grafana chart to create
+				// a dashboard provider with folder="logs" automatically.
+				// 13639 = Loki Logs Explorer  — browse & search pod logs by label
+				// 15443 = Promtail 2.x         — scrape targets, bytes/s per pod
+				// 12611 = Kubernetes / Logs     — per-namespace / per-pod log viewer
 				"grafana.sidecar.dashboards.enabled=true",
-				"grafana.dashboards.default.loki-logs.gnetId=13639",
-				"grafana.dashboards.default.loki-logs.revision=2",
-				"grafana.dashboards.default.loki-logs.datasource=Loki",
-				"grafana.dashboards.default.promtail.gnetId=15443",
-				"grafana.dashboards.default.promtail.revision=6",
-				"grafana.dashboards.default.promtail.datasource=Prometheus",
+				"grafana.dashboards.logs.loki-logs.gnetId=13639",
+				"grafana.dashboards.logs.loki-logs.revision=2",
+				"grafana.dashboards.logs.loki-logs.datasource=Loki",
+				"grafana.dashboards.logs.promtail.gnetId=15443",
+				"grafana.dashboards.logs.promtail.revision=6",
+				"grafana.dashboards.logs.promtail.datasource=Prometheus",
+				"grafana.dashboards.logs.k8s-logs.gnetId=12611",
+				"grafana.dashboards.logs.k8s-logs.revision=1",
+				"grafana.dashboards.logs.k8s-logs.datasource=Loki",
 			},
 			// When kube-prometheus-stack is already installed, skip the duplicate Grafana.
 			DisableGrafanaIfReleases: []string{"kube-prometheus-stack"},
@@ -197,6 +204,15 @@ func Registry() []Addon {
 				// Run ArgoCD server in insecure (HTTP) mode so the port-forward
 				// can use plain HTTP on port 80 → local port 8080.
 				"server.extraArgs[0]=--insecure",
+				// The repo-server liveness probe calls /healthz?full=true which
+				// performs a Redis round-trip. The default timeout (1s) is too short
+				// on cold starts, causing repeated kills. Raise timeout and failure
+				// threshold so the pod gets enough time to initialise.
+				"repoServer.livenessProbe.timeoutSeconds=15",
+				"repoServer.livenessProbe.failureThreshold=10",
+				"repoServer.livenessProbe.initialDelaySeconds=30",
+				"repoServer.readinessProbe.timeoutSeconds=15",
+				"repoServer.readinessProbe.initialDelaySeconds=15",
 			},
 			ArgoCDSvc:          "argocd-server",
 			ArgoCDDefaultCreds: "admin / kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d",
@@ -506,12 +522,15 @@ func Install(kubeCtx string, a Addon) error {
 					"grafana.additionalDataSources[0].access=proxy",
 					"grafana.additionalDataSources[0].isDefault=false",
 					"grafana.sidecar.dashboards.enabled=true",
-					"grafana.dashboards.default.loki-logs.gnetId=13639",
-					"grafana.dashboards.default.loki-logs.revision=2",
-					"grafana.dashboards.default.loki-logs.datasource=Loki",
-					"grafana.dashboards.default.promtail.gnetId=15443",
-					"grafana.dashboards.default.promtail.revision=6",
-					"grafana.dashboards.default.promtail.datasource=Prometheus",
+					"grafana.dashboards.logs.loki-logs.gnetId=13639",
+					"grafana.dashboards.logs.loki-logs.revision=2",
+					"grafana.dashboards.logs.loki-logs.datasource=Loki",
+					"grafana.dashboards.logs.promtail.gnetId=15443",
+					"grafana.dashboards.logs.promtail.revision=6",
+					"grafana.dashboards.logs.promtail.datasource=Prometheus",
+					"grafana.dashboards.logs.k8s-logs.gnetId=12611",
+					"grafana.dashboards.logs.k8s-logs.revision=1",
+					"grafana.dashboards.logs.k8s-logs.datasource=Loki",
 				)
 			}
 		}
