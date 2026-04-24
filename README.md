@@ -65,6 +65,108 @@ go install github.com/kemilad/karpx@latest
 Download the binary for your platform from [Releases](https://github.com/kemilad/karpx/releases),
 extract it, and place it on your `$PATH`.
 
+## AWS Prerequisites (EKS only)
+
+> **Skip this section if you are using Azure AKS or GCP GKE** — those providers
+> handle node identity differently and do not need manual IAM setup.
+
+Karpenter on AWS needs two IAM roles and several AWS resources to exist
+**before** you run `karpx install`. Without them the install appears to
+succeed but nodes never provision (you will see `AccessDenied: iam:PassRole`
+in Karpenter's logs).
+
+| Resource | Purpose |
+|----------|---------|
+| **Controller IAM role** | Assumed by Karpenter's pod via IRSA. ARN passed to `karpx install --role-arn`. |
+| **Node IAM role** | Assumed by EC2 instances Karpenter launches. Name set in `EC2NodeClass spec.role`. |
+| **SQS interruption queue** | Receives Spot interruption / rebalance events for graceful draining. |
+| **Subnet discovery tags** | `karpenter.sh/discovery: <cluster-name>` on every subnet Karpenter may use. |
+| **Security group discovery tags** | Same tag on the node security group. |
+| **OIDC provider** | Required for IRSA — lets Karpenter pods assume the controller role. |
+
+### Quickest path — Terraform (recommended)
+
+The `terraform/` directory in this repo contains a ready-to-use module that
+creates everything above for a **new** EKS cluster (VPC, cluster, managed
+node group for system pods, Karpenter roles, SQS queue, tags):
+
+```bash
+git clone https://github.com/kemilad/karpx
+cd karpx/terraform
+
+# 1. Set your cluster name and region
+cat > terraform.tfvars <<EOF
+cluster_name = "my-cluster"
+region       = "us-east-1"
+EOF
+
+# 2. Create all resources (~5 min)
+terraform init
+terraform apply
+
+# 3. Configure kubectl
+aws eks update-kubeconfig --region us-east-1 --name my-cluster
+```
+
+After `terraform apply` the outputs show everything you need:
+
+```
+karpenter_controller_role_arn = "arn:aws:iam::123456789012:role/my-cluster-karpenter-controller"
+karpenter_node_role_name      = "my-cluster-karpenter-node"
+karpx_install_command         = "karpx install --provider aws -c my-cluster ..."
+```
+
+Copy the `karpx_install_command` output and run it — karpx will use the
+controller role ARN to configure the Helm values for IRSA automatically.
+
+When you later generate a **NodePool manifest** in karpx (`karpx ui` →
+Node Provisioning, or `karpx nodes`), enter the **node role name**
+(`my-cluster-karpenter-node`) in the "Karpenter Node Role" field — **not**
+the controller role ARN.
+
+### If you already have an EKS cluster
+
+If your cluster exists but the Karpenter IAM roles do not, apply only the IAM
+portion of the Terraform module:
+
+```bash
+# From karpx/terraform — target only the IAM + SQS resources
+terraform apply \
+  -target=aws_iam_role.karpenter_node \
+  -target=aws_iam_role.karpenter_controller \
+  -target=aws_iam_role_policy.karpenter_controller \
+  -target=aws_iam_role_policy_attachment.karpenter_node_worker \
+  -target=aws_iam_role_policy_attachment.karpenter_node_ecr \
+  -target=aws_iam_role_policy_attachment.karpenter_node_cni \
+  -target=aws_iam_role_policy_attachment.karpenter_node_ssm \
+  -target=aws_iam_instance_profile.karpenter_node \
+  -target=aws_eks_access_entry.karpenter_node \
+  -target=aws_sqs_queue.karpenter_interruption \
+  -target=aws_sqs_queue_policy.karpenter_interruption \
+  -target=aws_cloudwatch_event_rule.spot_interruption \
+  -target=aws_cloudwatch_event_rule.rebalance \
+  -target=aws_cloudwatch_event_rule.instance_state
+```
+
+Then tag your existing subnets and node security group for discovery:
+
+```bash
+# Tag each subnet Karpenter may use
+aws ec2 create-tags \
+  --resources subnet-xxxx subnet-yyyy \
+  --tags Key=karpenter.sh/discovery,Value=my-cluster
+
+# Tag the node security group
+aws ec2 create-tags \
+  --resources sg-xxxx \
+  --tags Key=karpenter.sh/discovery,Value=my-cluster
+```
+
+> **Common mistake:** using the controller role ARN in `EC2NodeClass spec.role`.
+> That field must be the **node** role *name* (e.g. `my-cluster-karpenter-node`),
+> not the controller role ARN. The node role is what EC2 instances assume;
+> the controller role is what Karpenter's pod assumes.
+
 ## Usage
 
 ### Interactive TUI

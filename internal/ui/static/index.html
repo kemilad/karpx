@@ -848,6 +848,32 @@
     <button class="modal-close" onclick="closeInstallModal()">✕</button>
     <div class="modal-title">⚡ Install Karpenter</div>
 
+    <!-- AWS prerequisites notice — only shown for AWS clusters -->
+    <details id="im-aws-prereqs" style="display:none;margin-bottom:1rem;border:1px solid rgba(245,166,35,0.35);border-radius:6px;padding:0.6rem 0.8rem;background:rgba(245,166,35,0.06)">
+      <summary style="cursor:pointer;font-size:0.8rem;font-weight:600;color:var(--yellow,#f5a623);user-select:none">
+        ⚠ AWS Prerequisites — read before installing
+      </summary>
+      <div style="margin-top:0.7rem;font-size:0.78rem;color:var(--text-dim);line-height:1.6">
+        <p style="margin:0 0 0.5rem">Karpenter on AWS requires two IAM roles to exist <strong>before</strong> installing:</p>
+        <ol style="margin:0 0 0.6rem;padding-left:1.2rem">
+          <li><strong>Controller role</strong> — assumed by Karpenter's pods via IRSA. Its ARN goes in the field below.</li>
+          <li><strong>Node role</strong> — assumed by EC2 instances Karpenter provisions. Its <em>name</em> goes in the EC2NodeClass <code>spec.role</code> when you generate a NodePool manifest.</li>
+        </ol>
+        <p style="margin:0 0 0.4rem">Both roles, the SQS interruption queue, and the subnet/security-group discovery tags can be created in one step using the Terraform module included in the karpx repo:</p>
+        <pre style="background:rgba(0,0,0,0.25);border-radius:4px;padding:0.5rem 0.7rem;overflow-x:auto;font-size:0.72rem;margin:0 0 0.5rem">git clone https://github.com/kemilad/karpx
+cd karpx/terraform
+cp terraform.tfvars.example terraform.tfvars  # set cluster_name + region
+terraform init && terraform apply</pre>
+        <p style="margin:0 0 0.25rem">After <code>terraform apply</code>, the outputs include:</p>
+        <ul style="margin:0 0 0.3rem;padding-left:1.2rem">
+          <li><code>karpenter_controller_role_arn</code> → paste into the field below</li>
+          <li><code>karpenter_node_role_name</code> → use in EC2NodeClass <code>spec.role</code></li>
+          <li><code>karpx_install_command</code> → ready-to-run install command</li>
+        </ul>
+        <p style="margin:0.4rem 0 0;color:var(--red,#e05252)">Without these roles, the install will appear to succeed but nodes will never provision (AccessDenied on iam:PassRole).</p>
+      </div>
+    </details>
+
     <div class="install-modal-field">
       <label>Cluster context</label>
       <input type="text" id="im-context" readonly style="opacity:0.6" />
@@ -1299,6 +1325,11 @@
     document.getElementById('im-custom-hint').textContent  = '';
     document.getElementById('im-custom-wrap').style.display = 'none';
     document.getElementById('im-install-btn').disabled = false;
+
+    // Show AWS prerequisites notice only for AWS EKS clusters
+    const isAws = ctx.includes('eks') || ctx.includes('amazonaws') || parseEksContext(ctx).region;
+    const prereqs = document.getElementById('im-aws-prereqs');
+    prereqs.style.display = isAws ? '' : 'none';
 
     const sel = document.getElementById('im-version-select');
     sel.innerHTML = '<option value="">Fetching compatible versions…</option>';
