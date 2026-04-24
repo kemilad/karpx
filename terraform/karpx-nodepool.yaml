@@ -53,7 +53,7 @@ metadata:
 spec:
   amiSelectorTerms:
     - alias: al2023@latest
-  role: "arn:aws:iam::143252097192:role/karpx-test-karpenter-controller"
+  role: "karpx-test-karpenter-node"
   subnetSelectorTerms:
     - tags:
         karpenter.sh/discovery: "karpx-test"

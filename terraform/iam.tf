@@ -281,9 +281,12 @@ resource "aws_iam_role_policy" "karpenter_controller" {
         }
       },
       {
-        Sid      = "AllowInstanceProfileReadActions"
-        Effect   = "Allow"
-        Action   = ["iam:GetInstanceProfile"]
+        Sid    = "AllowInstanceProfileReadActions"
+        Effect = "Allow"
+        Action = [
+          "iam:GetInstanceProfile",
+          "iam:ListInstanceProfiles"
+        ]
         Resource = "*"
       },
       {
