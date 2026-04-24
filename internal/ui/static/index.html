@@ -942,6 +942,11 @@
       <div id="nodeclasses-list"><span style="color:var(--muted);font-size:0.78rem">Loading…</span></div>
     </div>
 
+    <div class="modal-section" id="events-section" style="display:none">
+      <div class="modal-section-title">Recent Events</div>
+      <div id="events-list"></div>
+    </div>
+
     <div class="modal-section">
       <div class="modal-section-title">Provisioning Mode</div>
       <div class="mode-btns">
@@ -1626,6 +1631,12 @@
 
     document.getElementById('nodes-modal').classList.add('open');
 
+    // Reset events and role warning
+    document.getElementById('events-section').style.display = 'none';
+    document.getElementById('events-list').innerHTML = '';
+    const existingWarn = document.getElementById('role-warn');
+    if (existingWarn) existingWarn.remove();
+
     // Fetch existing NodePools + EC2NodeClasses
     const npList = document.getElementById('nodepools-list');
     const ncList = document.getElementById('nodeclasses-list');
@@ -1684,6 +1695,14 @@
             const roleField = document.getElementById('field-role-arn');
             if (roleField && !roleField.value) {
               roleField.value = withRole.role;
+              // Warn if the role looks like the controller role, not the node role
+              if (withRole.role.includes('controller')) {
+                const warn = document.createElement('div');
+                warn.id = 'role-warn';
+                warn.style.cssText = 'color:var(--yellow,#f5a623);font-size:0.72rem;margin-top:0.25rem';
+                warn.textContent = '⚠ This looks like the controller role. The node role is usually named karpenter-node or KarpenterNodeRole-*.';
+                roleField.parentNode.appendChild(warn);
+              }
             }
           }
         }
@@ -1693,7 +1712,46 @@
         const roleField = document.getElementById('field-role-arn');
         if (roleField && !roleField.value) {
           const storageKey = `karpx-node-role-${clusterName || ctx}`;
-          roleField.value = localStorage.getItem(storageKey) || '';
+          const stored = localStorage.getItem(storageKey) || '';
+          roleField.value = stored;
+          if (stored && stored.includes('controller')) {
+            if (!document.getElementById('role-warn')) {
+              const warn = document.createElement('div');
+              warn.id = 'role-warn';
+              warn.style.cssText = 'color:var(--yellow,#f5a623);font-size:0.72rem;margin-top:0.25rem';
+              warn.textContent = '⚠ Stored role looks like the controller role. The node role is usually named karpenter-node or KarpenterNodeRole-*.';
+              roleField.parentNode.appendChild(warn);
+            }
+          }
+        }
+
+        // Events section
+        const evSection = document.getElementById('events-section');
+        const evList    = document.getElementById('events-list');
+        const events    = data.events || [];
+        if (events.length === 0) {
+          evSection.style.display = 'none';
+        } else {
+          evSection.style.display = '';
+          // Sort: Warnings first, then by time descending; cap at 30
+          const sorted = [...events].sort((a, b) => {
+            if (a.type !== b.type) return a.type === 'Warning' ? -1 : 1;
+            return (b.time || '').localeCompare(a.time || '');
+          }).slice(0, 30);
+          evList.innerHTML = `<table class="np-table" style="font-size:0.72rem">
+            <thead><tr><th>Time</th><th>Kind / Name</th><th>Reason</th><th>Message</th></tr></thead>
+            <tbody>${sorted.map(ev => {
+              const isWarn = ev.type === 'Warning';
+              const rowStyle = isWarn ? 'color:var(--red,#e05252)' : '';
+              const ts = ev.time ? ev.time.replace('T', ' ').replace(/\.\d+Z$/, 'Z') : '—';
+              return `<tr style="${rowStyle}">
+                <td style="white-space:nowrap">${esc(ts)}</td>
+                <td style="white-space:nowrap">${esc(ev.kind)}/${esc(ev.name)}</td>
+                <td style="white-space:nowrap">${esc(ev.reason)}</td>
+                <td>${esc(ev.message)}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>`;
         }
       })
       .catch(() => {

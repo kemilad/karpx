@@ -241,10 +241,21 @@ type NodeClassDetail struct {
 	NotReadyMsg string `json:"not_ready_msg,omitempty"`
 }
 
+// NodeEvent is a single Kubernetes event related to Karpenter resources.
+type NodeEvent struct {
+	Time    string `json:"time"`
+	Type    string `json:"type"`    // Normal | Warning
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+}
+
 // NodePoolListResponse is returned by GET /api/nodepools.
 type NodePoolListResponse struct {
 	NodePools   []NodePoolDetail  `json:"node_pools"`
 	NodeClasses []NodeClassDetail `json:"node_classes"`
+	Events      []NodeEvent       `json:"events"`
 	Error       string            `json:"error,omitempty"`
 }
 
@@ -732,6 +743,7 @@ func Serve(port int, kubeCtx string) error {
 		resp := NodePoolListResponse{
 			NodePools:   []NodePoolDetail{},
 			NodeClasses: []NodeClassDetail{},
+			Events:      []NodeEvent{},
 		}
 
 		// ── NodePools (v1beta1, Karpenter ≥ v0.31) ────────────────────────
@@ -853,6 +865,51 @@ func Serve(port int, kubeCtx string) error {
 						})
 					}
 				}
+			}
+		}
+
+		// ── Karpenter events (NodePool, EC2NodeClass, NodeClaim) ──────────────
+		type k8sEvent struct {
+			LastTimestamp string `json:"lastTimestamp"`
+			EventTime     string `json:"eventTime"`
+			Type          string `json:"type"`
+			Reason        string `json:"reason"`
+			Message       string `json:"message"`
+			InvolvedObject struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"involvedObject"`
+		}
+		type k8sEventList struct {
+			Items []k8sEvent `json:"items"`
+		}
+		for _, kind := range []string{"NodePool", "EC2NodeClass", "NodeClaim"} {
+			evArgs := []string{"get", "events", "--all-namespaces", "-o", "json",
+				"--field-selector", "involvedObject.kind=" + kind}
+			if kubeCtxParam != "" {
+				evArgs = append(evArgs, "--context", kubeCtxParam)
+			}
+			evOut, evErr := exec.CommandContext(r.Context(), "kubectl", evArgs...).Output()
+			if evErr != nil {
+				continue
+			}
+			var evList k8sEventList
+			if json.Unmarshal(evOut, &evList) != nil {
+				continue
+			}
+			for _, ev := range evList.Items {
+				ts := ev.LastTimestamp
+				if ts == "" {
+					ts = ev.EventTime
+				}
+				resp.Events = append(resp.Events, NodeEvent{
+					Time:    ts,
+					Type:    ev.Type,
+					Reason:  ev.Reason,
+					Message: ev.Message,
+					Kind:    ev.InvolvedObject.Kind,
+					Name:    ev.InvolvedObject.Name,
+				})
 			}
 		}
 
