@@ -219,7 +219,13 @@ resource "aws_iam_role_policy" "karpenter_controller" {
         Sid    = "AllowPassingInstanceRole"
         Effect = "Allow"
         Action = ["iam:PassRole"]
-        Resource = aws_iam_role.karpenter_node.arn
+        # Allow passing any role in this cluster's namespace so that either the
+        # dedicated karpenter-node role OR the managed node-group role can be
+        # referenced in EC2NodeClass spec.role without a 403.
+        Resource = [
+          aws_iam_role.karpenter_node.arn,
+          aws_iam_role.node.arn,
+        ]
         Condition = {
           StringEquals = {
             "iam:PassedToService" = "ec2.amazonaws.com"

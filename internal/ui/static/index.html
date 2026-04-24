@@ -1716,20 +1716,34 @@
             }).join('')}</tbody>
           </table>`;
 
-          // Pre-fill node role from existing EC2NodeClass (first one with a role)
-          const withRole = data.node_classes.find(nc => nc.role);
+          // Pre-fill node role from existing EC2NodeClass (first one with a role).
+          // A role ending in "-node-role" (without "karpenter") is the managed node
+          // group role — skip it so we don't perpetuate the wrong value.
+          const looksLikeManagedNodeGroupRole = r =>
+            r && !r.includes('karpenter') && (r.endsWith('-node-role') || r.endsWith('/node-role'));
+          const withRole = data.node_classes.find(nc => nc.role && !looksLikeManagedNodeGroupRole(nc.role));
+          const skippedBadRole = !withRole && data.node_classes.find(nc => nc.role);
           if (withRole) {
             const roleField = document.getElementById('field-role-arn');
             if (roleField && !roleField.value) {
               roleField.value = withRole.role;
-              // Warn if the role looks like the controller role, not the node role
               if (withRole.role.includes('controller')) {
                 const warn = document.createElement('div');
                 warn.id = 'role-warn';
                 warn.style.cssText = 'color:var(--yellow,#f5a623);font-size:0.72rem;margin-top:0.25rem';
-                warn.textContent = '⚠ This looks like the controller role. The node role is usually named karpenter-node or KarpenterNodeRole-*.';
+                warn.textContent = '⚠ This looks like the controller role. The node role should be the one Karpenter-provisioned nodes assume (e.g. karpx-test-karpenter-node).';
                 roleField.parentNode.appendChild(warn);
               }
+            }
+          } else if (skippedBadRole) {
+            // The existing EC2NodeClass has a managed-node-group role — warn the user.
+            const roleField = document.getElementById('field-role-arn');
+            if (roleField) {
+              const warn = document.createElement('div');
+              warn.id = 'role-warn';
+              warn.style.cssText = 'color:var(--yellow,#f5a623);font-size:0.72rem;margin-top:0.25rem';
+              warn.textContent = `⚠ Existing EC2NodeClass uses "${skippedBadRole.role}" which is the managed node group role, not the Karpenter node role. Use the role ending in -karpenter-node (e.g. karpx-test-karpenter-node).`;
+              roleField.parentNode.appendChild(warn);
             }
           }
         }
