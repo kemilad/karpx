@@ -1022,7 +1022,7 @@ terraform init && terraform apply</pre>
 
       <div id="cost-section" class="modal-section" style="display:none">
         <div class="cost-card">
-          <div class="cost-card-title">Estimated Cost</div>
+          <div class="cost-card-title">Estimated Cost <span id="cost-recalc-badge" style="display:none;font-size:0.7rem;font-weight:400;color:var(--text-dim);margin-left:0.4rem">↻ Recalculating…</span></div>
           <div class="cost-grid" id="cost-grid"></div>
           <div class="cost-note" id="cost-note"></div>
         </div>
@@ -1031,7 +1031,7 @@ terraform init && terraform apply</pre>
       <div class="modal-section">
         <div class="modal-section-title">Manifest</div>
         <textarea class="manifest-area" id="manifest-area" spellcheck="false"
-                  oninput="clearValidationResult()"></textarea>
+                  oninput="clearValidationResult(); scheduleManifestCostUpdate()"></textarea>
         <div id="validate-result" class="validate-result"></div>
         <div class="modal-actions" style="margin-top:0.6rem">
           <button class="btn-apply" id="btn-apply" onclick="doApplyManifest()">✓ Apply to Cluster</button>
@@ -1984,6 +1984,69 @@ terraform init && terraform apply</pre>
     reader.readAsText(file);
     // Reset so same file can be re-imported
     input.value = '';
+  }
+
+  // ── Dynamic cost re-estimation on manifest edit ─────────────────────────
+  let _costDebounceTimer = null;
+
+  function scheduleManifestCostUpdate() {
+    clearTimeout(_costDebounceTimer);
+    _costDebounceTimer = setTimeout(updateCostFromManifest, 600);
+  }
+
+  function extractYamlValues(yaml, key) {
+    const lines = yaml.split('\n');
+    let inBlock = false;
+    let inValues = false;
+    const values = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.includes(`key: ${key}`) || line.includes(`key: "${key}"`)) {
+        inBlock = true;
+        inValues = false;
+        continue;
+      }
+      if (inBlock) {
+        if (/^\s*values\s*:/.test(line)) {
+          inValues = true;
+          const inline = line.match(/values\s*:\s*\[([^\]]+)\]/);
+          if (inline) return inline[1].split(',').map(s => s.trim()).filter(Boolean);
+          continue;
+        }
+        if (inValues && /^\s*-\s*\S/.test(line)) {
+          values.push(line.trim().replace(/^-\s*/, '').replace(/^['"]|['"]$/g, ''));
+          continue;
+        }
+        if (inValues && line.trim() !== '' && !/^\s*-/.test(line)) { inBlock = false; inValues = false; }
+        if (!inValues && /^\s*-\s*key:/.test(line)) { inBlock = false; }
+      }
+    }
+    return values;
+  }
+
+  async function updateCostFromManifest() {
+    const yaml = document.getElementById('manifest-area').value;
+    if (!yaml.trim()) return;
+    const costSection = document.getElementById('cost-section');
+    if (costSection.style.display === 'none') return; // no initial cost card yet
+
+    const families = extractYamlValues(yaml, 'karpenter.k8s.aws/instance-family');
+    if (families.length === 0) return;
+    const capacities = extractYamlValues(yaml, 'karpenter.sh/capacity-type');
+
+    const badge = document.getElementById('cost-recalc-badge');
+    badge.style.display = '';
+    try {
+      const resp = await fetch('/api/nodes/cost', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: _nodesCtx, families, capacity_types: capacities }),
+      });
+      const data = await resp.json();
+      if (!data.error) renderCostCard(data);
+    } catch (_) { /* silent — cost update is best-effort */ } finally {
+      badge.style.display = 'none';
+    }
   }
 
   function clearValidationResult() {

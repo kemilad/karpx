@@ -154,6 +154,15 @@ var sizeSuffix = map[int]string{
 
 // EstimateCost returns an approximate cost projection for an AWS recommendation.
 // For Azure and GCP, the Note field explains that pricing is AWS-only for now.
+// MinCPUFromProfile returns the minimum vCPU count derived from a workload profile.
+// Exported so the HTTP handler can build a minimal Recommendation for cost-only calls.
+func MinCPUFromProfile(profile *kube.WorkloadProfile) int {
+	if profile == nil {
+		return 2
+	}
+	return minCPU(profile.MaxPodCPUm)
+}
+
 func EstimateCost(rec Recommendation, profile *kube.WorkloadProfile) CostEstimate {
 	if rec.Provider != kube.ProviderAWS {
 		return CostEstimate{Note: "Cost estimation currently available for AWS only"}

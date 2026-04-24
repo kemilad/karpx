@@ -296,6 +296,13 @@ type ApplyRequest struct {
 	Manifest string `json:"manifest"`
 }
 
+// CostRequest is the JSON body for POST /api/nodes/cost.
+type CostRequest struct {
+	Context       string   `json:"context"`
+	Families      []string `json:"families"`
+	CapacityTypes []string `json:"capacity_types"`
+}
+
 // AddonStatusEntry is one row in the GET /api/addons response.
 type AddonStatusEntry struct {
 	ID          string `json:"id"`
@@ -983,6 +990,53 @@ func Serve(port int, kubeCtx string) error {
 			Capacities: rec.CapacityTypes,
 			Archs:      rec.Architectures,
 
+			CostPrimaryType:        c.PrimaryType,
+			CostVCPUs:              c.VCPUs,
+			CostMemGiB:             c.MemGiB,
+			CostEstimatedNodes:     c.EstimatedNodes,
+			CostOnDemandPerNodeHr:  c.OnDemandPerNodeHr,
+			CostOnDemandMonthlyUSD: c.OnDemandMonthlyUSD,
+			CostSpotPerNodeHr:      c.SpotPerNodeHr,
+			CostSpotMonthlyUSD:     c.SpotMonthlyUSD,
+			CostSpotSavingsPct:     c.SpotSavingsPct,
+			CostHasSpot:            c.HasSpot,
+			CostNote:               c.Note,
+		})
+	})
+
+	// ── Lightweight cost re-estimation (no manifest generation) ────────────
+	mux.HandleFunc("/api/nodes/cost", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		var req CostRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(RecommendResponse{Error: "invalid request body"})
+			return
+		}
+		if len(req.Families) == 0 {
+			json.NewEncoder(w).Encode(RecommendResponse{Error: "no instance families provided"})
+			return
+		}
+
+		provider := kube.DetectProvider(req.Context)
+		profile, err := kube.AnalyzeWorkloads(req.Context)
+		if err != nil {
+			profile = &kube.WorkloadProfile{NoRequests: true}
+		}
+
+		rec := nodes.Recommendation{
+			Provider:         provider,
+			InstanceFamilies: req.Families,
+			CapacityTypes:    req.CapacityTypes,
+			MinNodeCPU:       nodes.MinCPUFromProfile(profile),
+		}
+		c := nodes.EstimateCost(rec, profile)
+		json.NewEncoder(w).Encode(RecommendResponse{
 			CostPrimaryType:        c.PrimaryType,
 			CostVCPUs:              c.VCPUs,
 			CostMemGiB:             c.MemGiB,
