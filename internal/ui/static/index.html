@@ -1571,12 +1571,39 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ context: ctx, namespace, release, delete_crds: deleteCRDs, delete_namespace: deleteNS }),
       });
-      const result = await resp.json();
-      const steps = result.steps || [];
-      resultEl.textContent = steps.join('\n');
-      resultEl.scrollTop = resultEl.scrollHeight;
 
-      if (result.success) {
+      // Server streams SSE — read line by line so progress appears live.
+      const reader = resp.body.getReader();
+      const dec    = new TextDecoder();
+      let buf = '';
+      let success = false;
+      let errorMsg = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        // SSE frames are separated by \n\n
+        const frames = buf.split('\n\n');
+        buf = frames.pop(); // keep incomplete frame
+        for (const frame of frames) {
+          for (const line of frame.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            let msg;
+            try { msg = JSON.parse(line.slice(6)); } catch { continue; }
+            if (msg.step) {
+              resultEl.textContent += msg.step + '\n';
+              resultEl.scrollTop = resultEl.scrollHeight;
+            }
+            if (msg.done) {
+              success  = msg.success;
+              errorMsg = msg.error || '';
+            }
+          }
+        }
+      }
+
+      if (success) {
         confirmBtn.textContent = '✓ Done';
         confirmBtn.style.background = 'rgba(34,197,94,0.15)';
         confirmBtn.style.borderColor = 'var(--green)';

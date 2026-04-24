@@ -461,16 +461,14 @@ func Serve(port int, kubeCtx string) error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
 
 		var req UninstallRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			json.NewEncoder(w).Encode(InstallResponse{Error: "invalid request body"})
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 			return
 		}
 		if req.Context == "" {
-			json.NewEncoder(w).Encode(InstallResponse{Error: "context is required"})
+			http.Error(w, `{"error":"context is required"}`, http.StatusBadRequest)
 			return
 		}
 		release := req.Release
@@ -482,17 +480,32 @@ func Serve(port int, kubeCtx string) error {
 			ns = "karpenter"
 		}
 
+		// Stream steps back via SSE so the UI shows live progress.
+		flusher, canFlush := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		type sseMsg struct {
+			Step    string `json:"step,omitempty"`
+			Done    bool   `json:"done,omitempty"`
+			Success bool   `json:"success,omitempty"`
+			Error   string `json:"error,omitempty"`
+		}
+		send := func(msg sseMsg) {
+			b, _ := json.Marshal(msg)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		step := func(s string) { send(sseMsg{Step: s}) }
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
-		var steps []string
-		addStep := func(s string) { steps = append(steps, s) }
-
 		// ── Step 0: strip finalizers ─────────────────────────────────────
-		// Remove Karpenter finalizers BEFORE helm uninstall removes the
-		// controller. Without this, NodePool/NodeClaim/NodeClass objects get
-		// stuck in Terminating because no controller is left to process them.
-		addStep("Removing Karpenter finalizers…")
+		step("Removing Karpenter finalizers…")
 		for _, res := range []string{
 			"nodeclaims",
 			"nodepools",
@@ -502,57 +515,55 @@ func Serve(port int, kubeCtx string) error {
 		} {
 			stripKarpenterFinalizers(ctx, req.Context, res)
 		}
-		addStep("✓ Finalizers cleared")
+		step("✓ Finalizers cleared")
 
 		// ── Step 1: helm uninstall ────────────────────────────────────────
-		addStep("Running helm uninstall…")
-		helmArgs := []string{"uninstall", release, "--namespace", ns, "--kube-context", req.Context}
+		step("Running helm uninstall…")
+		helmArgs := []string{"uninstall", release, "--namespace", ns, "--kube-context", req.Context, "--timeout", "2m", "--wait=false"}
 		out, err := exec.CommandContext(ctx, "helm", helmArgs...).CombinedOutput()
 		outStr := strings.TrimSpace(string(out))
 		if err != nil {
-			// "release: not found" means it was already removed — treat as success
 			if strings.Contains(outStr, "not found") || strings.Contains(outStr, "release: not found") {
-				addStep("✓ Helm release already removed (was not installed)")
+				step("✓ Helm release already removed (was not installed)")
 			} else {
-				addStep(fmt.Sprintf("✗ helm uninstall failed: %v — %s", err, outStr))
-				json.NewEncoder(w).Encode(InstallResponse{Error: strings.Join(steps, "\n"), Steps: steps})
+				step(fmt.Sprintf("✗ helm uninstall failed: %v — %s", err, outStr))
+				send(sseMsg{Done: true, Success: false, Error: outStr})
 				return
 			}
 		} else {
-			addStep("✓ Helm release removed")
+			step("✓ Helm release removed")
 		}
 
 		// ── Step 2: delete custom resources ──────────────────────────────
 		if req.DeleteCRDs {
-			addStep("Deleting NodeClaims…")
+			step("Deleting NodeClaims…")
 			kubectlDel := func(resource string) {
-				args := []string{"delete", resource, "--all", "--context", req.Context, "--ignore-not-found"}
+				args := []string{"delete", resource, "--all", "--context", req.Context, "--ignore-not-found", "--timeout=30s"}
 				o, e := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
 				if e != nil {
-					addStep(fmt.Sprintf("⚠ kubectl delete %s: %v — %s", resource, e, strings.TrimSpace(string(o))))
+					step(fmt.Sprintf("⚠ kubectl delete %s: %v — %s", resource, e, strings.TrimSpace(string(o))))
 				} else {
-					addStep(fmt.Sprintf("✓ %s deleted", resource))
+					step(fmt.Sprintf("✓ %s deleted", resource))
 				}
 			}
 			kubectlDel("nodeclaims")
 			kubectlDel("nodepools")
-			// provider-specific node classes
 			for _, res := range []string{
 				"ec2nodeclasses.karpenter.k8s.aws",
 				"aksnodeclasses.karpenter.azure.com",
 				"gcpnodeclasses.karpenter.k8s.gcp",
 			} {
-				args := []string{"delete", res, "--all", "--context", req.Context, "--ignore-not-found"}
+				args := []string{"delete", res, "--all", "--context", req.Context, "--ignore-not-found", "--timeout=30s"}
 				o, e := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
 				if e == nil && strings.TrimSpace(string(o)) != "" {
-					addStep(fmt.Sprintf("✓ %s deleted", res))
+					step(fmt.Sprintf("✓ %s deleted", res))
 				}
 			}
 
 			// ── Step 3: delete CRDs ───────────────────────────────────────
-			addStep("Deleting Karpenter CRDs…")
+			step("Deleting Karpenter CRDs…")
 			crdArgs := []string{
-				"delete", "crd", "--ignore-not-found", "--context", req.Context,
+				"delete", "crd", "--ignore-not-found", "--context", req.Context, "--timeout=30s",
 				"nodepools.karpenter.sh",
 				"nodeclaims.karpenter.sh",
 				"ec2nodeclasses.karpenter.k8s.aws",
@@ -561,26 +572,39 @@ func Serve(port int, kubeCtx string) error {
 			}
 			o, e := exec.CommandContext(ctx, "kubectl", crdArgs...).CombinedOutput()
 			if e != nil {
-				addStep(fmt.Sprintf("⚠ CRD deletion: %v — %s", e, strings.TrimSpace(string(o))))
+				step(fmt.Sprintf("⚠ CRD deletion: %v — %s", e, strings.TrimSpace(string(o))))
 			} else {
-				addStep("✓ Karpenter CRDs removed")
+				step("✓ Karpenter CRDs removed")
 			}
 		}
 
 		// ── Step 4: delete namespace ──────────────────────────────────────
 		if req.DeleteNamespace {
-			addStep(fmt.Sprintf("Deleting namespace %q…", ns))
-			nsArgs := []string{"delete", "namespace", ns, "--context", req.Context, "--ignore-not-found"}
+			step(fmt.Sprintf("Deleting namespace %q…", ns))
+			nsArgs := []string{"delete", "namespace", ns, "--context", req.Context, "--ignore-not-found", "--timeout=60s"}
 			o, e := exec.CommandContext(ctx, "kubectl", nsArgs...).CombinedOutput()
 			if e != nil {
-				addStep(fmt.Sprintf("⚠ namespace deletion: %v — %s", e, strings.TrimSpace(string(o))))
+				step(fmt.Sprintf("⚠ namespace deletion timed out or failed: %s", strings.TrimSpace(string(o))))
+				// Force-remove any stuck pods and retry namespace deletion
+				step("Force-removing stuck pods in namespace…")
+				podsArgs := []string{"delete", "pods", "--all", "-n", ns, "--context", req.Context,
+					"--grace-period=0", "--force", "--ignore-not-found", "--timeout=20s"}
+				exec.CommandContext(ctx, "kubectl", podsArgs...).Run() //nolint:errcheck
+				o2, e2 := exec.CommandContext(ctx, "kubectl",
+					"delete", "namespace", ns, "--context", req.Context, "--ignore-not-found", "--timeout=30s",
+				).CombinedOutput()
+				if e2 != nil {
+					step(fmt.Sprintf("⚠ namespace still not removed: %s", strings.TrimSpace(string(o2))))
+				} else {
+					step(fmt.Sprintf("✓ Namespace %q deleted", ns))
+				}
 			} else {
-				addStep(fmt.Sprintf("✓ Namespace %q deleted", ns))
+				step(fmt.Sprintf("✓ Namespace %q deleted", ns))
 			}
 		}
 
-		addStep("✓ Uninstall complete")
-		json.NewEncoder(w).Encode(InstallResponse{Success: true, Steps: steps})
+		step("✓ Uninstall complete")
+		send(sseMsg{Done: true, Success: true})
 	})
 
 	// ── Zero-downtime upgrade ────────────────────────────────────────────────
